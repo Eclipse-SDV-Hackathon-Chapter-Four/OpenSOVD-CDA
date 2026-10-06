@@ -6,5 +6,5 @@
 # odxtools image and runs generate.py inside it. Produces AZ3166.pdx.
 
 SCRIPT_DIR=$(dirname "$(realpath "$0")")
-docker build -f "$SCRIPT_DIR/docker/Dockerfile" "$SCRIPT_DIR" -t flxc1000-az3166-odx-gen
-docker run --rm -v "$SCRIPT_DIR:/data" -u "$(id -u):$(id -g)" -t flxc1000-az3166-odx-gen
+docker build -f "$SCRIPT_DIR/docker/Dockerfile" "$SCRIPT_DIR" -t az3166-odx-gen
+docker run --rm -v "$SCRIPT_DIR:/data" -u "$(id -u):$(id -g)" -t az3166-odx-gen

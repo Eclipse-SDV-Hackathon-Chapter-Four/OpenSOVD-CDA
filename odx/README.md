@@ -1,9 +1,9 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- This file is 100% AI-generated (Claude Code, Claude Opus 5.5). -->
 
-# FLXC1000-AZ3166 ODX
+# AZ3166 ODX
 
-This directory holds the ODX 2.2.0 description of the FLXC1000 ECU simulator on the
+This directory holds the ODX 2.2.0 description of the AZ3166 ECU simulator (FLXC1000 fork) on the
 MXCHIP AZ3166. It implements exactly `docs/diagnostics.md`, which is the single
 source of truth; change the spec first, then this directory.
 
