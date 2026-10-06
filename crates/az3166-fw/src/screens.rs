@@ -33,7 +33,7 @@ const REFRESH_MS: u32 = 1000;
 /// and its sign (in mg) when the text is upright. The board must be tilted
 /// beyond the threshold to change the orientation; lying flat keeps it.
 const ORIENTATION_AXIS: usize = 1;
-const UPRIGHT_SIGN: f32 = 1.0;
+const UPRIGHT_SIGN: f32 = -1.0;
 const ORIENTATION_THRESHOLD_MG: f32 = 500.0;
 const ORIENTATION_PERIOD_MS: u32 = 300;
 const NETWORK: u16 = 0x0000; // pseudo DID: network state from the board
