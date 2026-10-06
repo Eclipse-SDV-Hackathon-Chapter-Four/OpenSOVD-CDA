@@ -2,8 +2,8 @@
 # This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
 
 [package]
-name = "flxc1000-doip"
-description = "Allocation-free ISO 13400 DoIP entity (sans-IO) for the FLXC1000 simulator"
+name = "az3166-doip"
+description = "Allocation-free ISO 13400 DoIP entity (sans-IO) for the AZ3166 ECU simulator"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
