@@ -70,4 +70,15 @@ pub trait Board {
     fn set_display_text(&self, text: &[u8; 16]);
 
     fn write_boot_state(&self, state: BootState) -> Result<(), FlashError>;
+
+    /// Firmware version, NUL padded.
+    fn software_version(&self) -> [u8; 16];
+
+    /// App update (Boot variant): erases the inactive app slot and returns
+    /// its base address. Stalls the CPU for seconds.
+    fn update_begin(&self) -> Option<u32>;
+    /// Programs `data` at `address` inside the slot from `update_begin`.
+    fn flash_program(&self, address: u32, data: &[u8]) -> Result<(), FlashError>;
+    /// Marks the slot at `base` as installed (on trial) and the App to run.
+    fn update_commit(&self, base: u32) -> Result<(), FlashError>;
 }
