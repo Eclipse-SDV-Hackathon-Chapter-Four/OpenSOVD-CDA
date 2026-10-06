@@ -3,8 +3,8 @@
 # This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
 #
 # Local build: creates odx/.venv (odxtools pinned in requirements.txt),
-# generates FLXC1000_AZ3166.pdx, verifies it and, if an odx-converter jar is
-# available, converts it to FLXC1000_AZ3166.mdd for the Classic Diagnostic Adapter.
+# generates AZ3166.pdx, verifies it and, if an odx-converter jar is
+# available, converts it to AZ3166.mdd for the Classic Diagnostic Adapter.
 #
 #   ./generate.sh                                   # PDX only
 #   ODX_CONVERTER_JAR=/path/to/converter-all.jar ./generate.sh   # PDX + MDD
@@ -22,15 +22,15 @@ if [ ! -x .venv/bin/python ]; then
     fi
 fi
 
-.venv/bin/python generate.py FLXC1000_AZ3166.pdx
-.venv/bin/python verify.py FLXC1000_AZ3166.pdx
+.venv/bin/python generate.py AZ3166.pdx
+.venv/bin/python verify.py AZ3166.pdx
 
 if [ -n "$ODX_CONVERTER_JAR" ]; then
     # Newer odx-converter builds have subcommands; older ones take the PDX directly.
     if java -jar "$ODX_CONVERTER_JAR" --help 2>&1 | grep -q "convert"; then
-        java -jar "$ODX_CONVERTER_JAR" convert FLXC1000_AZ3166.pdx
+        java -jar "$ODX_CONVERTER_JAR" convert AZ3166.pdx
     else
-        java -jar "$ODX_CONVERTER_JAR" FLXC1000_AZ3166.pdx
+        java -jar "$ODX_CONVERTER_JAR" AZ3166.pdx
     fi
 else
     echo "ODX_CONVERTER_JAR not set, skipping PDX -> MDD conversion"
