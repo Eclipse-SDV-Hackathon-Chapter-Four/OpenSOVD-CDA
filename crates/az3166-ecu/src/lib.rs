@@ -37,7 +37,7 @@ pub use boot::BootEcu;
 /// 0x1001: distinct from the Raspberry Pi FLXC1000 (0x1000) on the same network.
 pub const ECU_ADDRESS: u16 = 0x1001;
 pub const FUNCTIONAL_ADDRESS: u16 = 0xFFFF;
-pub const VIN: &[u8; 17] = b"FLXC1000AZ3166001";
+pub const VIN: &[u8; 17] = b"AZ3166ECU00000001";
 
 pub const RESET_NONE: u8 = 0;
 pub const RESET_HARD: u8 = 1;
