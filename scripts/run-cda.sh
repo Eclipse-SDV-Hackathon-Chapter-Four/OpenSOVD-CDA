@@ -6,7 +6,7 @@
 #
 #   scripts/run-cda.sh <ecu-ip> [extra CDA args...]
 #
-# Uses odx/FLXC1000_AZ3166.mdd and the tester interface that routes to <ecu-ip>
+# Uses odx/AZ3166.mdd and the tester interface that routes to <ecu-ip>
 # (board or host_sim). SOVD API: http://localhost:20002 (swagger-ui).
 #
 # CDA checkout: $CDA_DIR (default ~/dev/classic-diagnostic-adapter). Uses
