@@ -50,6 +50,19 @@ class Cda:
         self.token = None
 
     def request(self, method: str, path: str, body=None, ok=(200, 201, 202, 204), timeout=120):
+        # Read-only requests are retried: the CDA can report an "Unexpected
+        # DoIP event type" when an acknowledgement of a concurrent request
+        # (e.g. its own TesterPresent) arrives while it waits for a response.
+        attempts = 3 if method == "GET" else 1
+        for attempt in range(attempts):
+            try:
+                return self._request(method, path, body, ok, timeout)
+            except CdaError as e:
+                if attempt == attempts - 1 or "Unexpected DoIP event" not in str(e):
+                    raise
+                time.sleep(1)
+
+    def _request(self, method: str, path: str, body, ok, timeout):
         url = path if path.startswith("http") else self.base + path
         data = None
         headers = {}
@@ -249,7 +262,8 @@ def main():
         time.sleep(3)
         wait_for_variant(cda, "_App", 180)
         new = cda.read("SoftwareVersion").get("SoftwareVersion", "?").strip()
-        if new != version:
+        # DID F195 holds 8 characters
+        if new != version[:8].strip():
             raise CdaError(
                 f"App {version} did not come up: the bootloader rolled back to {new} "
                 "(see the board console for the failed starts)"
