@@ -37,10 +37,6 @@ const ROUTINE_SELF_TEST: u16 = 0x1001;
 /// PWM duty cycles for each LED of the bar — increasing brightness.
 const LED_DUTY: [u8; LED_COUNT] = [40, 55, 70, 85, 100];
 
-/// Hardcoded simulation DTCs (from the original FLXC1000)
-const DTC_FLUX_CAPACITOR_OVERLOAD: [u8; 3] = [0x01, 0xE2, 0x40];
-const DTC_TEMPORAL_DISPLACEMENT: [u8; 3] = [0x03, 0x94, 0x47];
-
 /// DTC status testFailed | confirmedDTC
 const DTC_STATUS_FAILED_CONFIRMED: u8 = 0x09;
 
@@ -62,16 +58,94 @@ fn sensor_dtc(sensor: Sensor) -> [u8; 3] {
 }
 
 // ---------------------------------------------------------------------------
+// DIDs
+// ---------------------------------------------------------------------------
+
+/// App DIDs (and the common ones).
+pub fn read_did<B: Board>(
+    board: &B,
+    shared: &Shared,
+    did: u16,
+    buf: &mut [u8],
+) -> Result<usize, BuiltinNrc> {
+    if let Some(n) = common_did(did, &VARIANT_ID, shared, board, buf) {
+        return Ok(n);
+    }
+    let unavailable = BuiltinNrc::ConditionsNotCorrect;
+    match did {
+        0xF190 => {
+            buf[..17].copy_from_slice(&shared.vin.get());
+            Ok(17)
+        }
+        0xF201 => {
+            let (temp, _) = board.temperature_humidity().ok_or(unavailable)?;
+            buf[..2].copy_from_slice(&scaled_i16(temp, 0.1));
+            Ok(2)
+        }
+        0xF202 => {
+            let (_, humidity) = board.temperature_humidity().ok_or(unavailable)?;
+            buf[..2].copy_from_slice(&scaled_u16(humidity, 0.1));
+            Ok(2)
+        }
+        0xF203 => {
+            let pressure = board.pressure_hpa().ok_or(unavailable)?;
+            buf[..2].copy_from_slice(&scaled_u16(pressure, 0.1));
+            Ok(2)
+        }
+        0xF204 => Ok(write_xyz(
+            buf,
+            board.acceleration_mg().ok_or(unavailable)?,
+            1.0,
+        )),
+        0xF205 => {
+            // mdps -> 0.1 dps
+            Ok(write_xyz(
+                buf,
+                board.angular_rate_mdps().ok_or(unavailable)?,
+                100.0,
+            ))
+        }
+        0xF206 => Ok(write_xyz(
+            buf,
+            board.magnetic_field_mg().ok_or(unavailable)?,
+            1.0,
+        )),
+        0xF210 => {
+            buf[0] = board.buttons() & 0x03;
+            Ok(1)
+        }
+        0xF211 => {
+            buf[..3].copy_from_slice(&shared.rgb.get());
+            Ok(3)
+        }
+        0xF212 => {
+            buf[..16].copy_from_slice(&shared.display_text.get());
+            Ok(16)
+        }
+        0xF220 => {
+            buf[..4].copy_from_slice(&board.ip_address());
+            Ok(4)
+        }
+        0xF221 => {
+            buf[..6].copy_from_slice(&board.mac_address());
+            Ok(6)
+        }
+        0xF230 => {
+            let secs = (board.uptime_ms() / 1000) as u32;
+            buf[..4].copy_from_slice(&secs.to_be_bytes());
+            Ok(4)
+        }
+        _ => Err(BuiltinNrc::RequestOutOfRange),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ServerHandler
 // ---------------------------------------------------------------------------
 
 pub struct AppHandler<B: Board> {
     board: B,
     shared: &'static Shared,
-    vin: [u8; 17],
-    rgb: [u8; 3],
-    display_text: [u8; 16],
-    flux_capacitor_power: i32,
 }
 
 /// Converts a physical value to its raw value, rounded to nearest.
@@ -106,82 +180,7 @@ impl<B: Board> ServerHandler for AppHandler<B> {
     type Error = BuiltinNrc;
 
     fn read_did(&self, did: u16, buf: &mut [u8]) -> Result<usize, BuiltinNrc> {
-        if let Some(n) = common_did(did, &VARIANT_ID, self.shared, &self.board, buf) {
-            return Ok(n);
-        }
-        let unavailable = BuiltinNrc::ConditionsNotCorrect;
-        match did {
-            0xF190 => {
-                buf[..17].copy_from_slice(&self.vin);
-                Ok(17)
-            }
-            0xF200 => {
-                // FluxCapacitorPowerConsumption — pulse LED1 while reading
-                self.board.set_led(0, 100);
-                buf[..4].copy_from_slice(&self.flux_capacitor_power.to_be_bytes());
-                self.board.set_led(0, 0);
-                Ok(4)
-            }
-            0xF201 => {
-                let (temp, _) = self.board.temperature_humidity().ok_or(unavailable)?;
-                buf[..2].copy_from_slice(&scaled_i16(temp, 0.1));
-                Ok(2)
-            }
-            0xF202 => {
-                let (_, humidity) = self.board.temperature_humidity().ok_or(unavailable)?;
-                buf[..2].copy_from_slice(&scaled_u16(humidity, 0.1));
-                Ok(2)
-            }
-            0xF203 => {
-                let pressure = self.board.pressure_hpa().ok_or(unavailable)?;
-                buf[..2].copy_from_slice(&scaled_u16(pressure, 0.1));
-                Ok(2)
-            }
-            0xF204 => Ok(write_xyz(
-                buf,
-                self.board.acceleration_mg().ok_or(unavailable)?,
-                1.0,
-            )),
-            0xF205 => {
-                // mdps -> 0.1 dps
-                Ok(write_xyz(
-                    buf,
-                    self.board.angular_rate_mdps().ok_or(unavailable)?,
-                    100.0,
-                ))
-            }
-            0xF206 => Ok(write_xyz(
-                buf,
-                self.board.magnetic_field_mg().ok_or(unavailable)?,
-                1.0,
-            )),
-            0xF210 => {
-                buf[0] = self.board.buttons() & 0x03;
-                Ok(1)
-            }
-            0xF211 => {
-                buf[..3].copy_from_slice(&self.rgb);
-                Ok(3)
-            }
-            0xF212 => {
-                buf[..16].copy_from_slice(&self.display_text);
-                Ok(16)
-            }
-            0xF220 => {
-                buf[..4].copy_from_slice(&self.board.ip_address());
-                Ok(4)
-            }
-            0xF221 => {
-                buf[..6].copy_from_slice(&self.board.mac_address());
-                Ok(6)
-            }
-            0xF230 => {
-                let secs = (self.board.uptime_ms() / 1000) as u32;
-                buf[..4].copy_from_slice(&secs.to_be_bytes());
-                Ok(4)
-            }
-            _ => Err(BuiltinNrc::RequestOutOfRange),
-        }
+        read_did(&self.board, self.shared, did, buf)
     }
 
     fn write_did(&mut self, did: u16, data: &[u8]) -> Result<(), BuiltinNrc> {
@@ -195,14 +194,19 @@ impl<B: Board> ServerHandler for AppHandler<B> {
             return Err(BuiltinNrc::IncorrectMessageLengthOrInvalidFormat);
         }
         match did {
-            0xF190 => self.vin.copy_from_slice(data),
+            0xF190 => self
+                .shared
+                .vin
+                .set(data.try_into().expect("length checked")),
             0xF211 => {
-                self.rgb.copy_from_slice(data);
-                self.board.set_rgb(self.rgb);
+                let rgb: [u8; 3] = data.try_into().expect("length checked");
+                self.shared.rgb.set(&rgb);
+                self.board.set_rgb(rgb);
             }
             _ => {
-                self.display_text.copy_from_slice(data);
-                self.board.set_display_text(&self.display_text);
+                let text: [u8; 16] = data.try_into().expect("length checked");
+                self.shared.display_text.set(&text);
+                self.board.set_display_text(&text);
             }
         }
         Ok(())
@@ -314,7 +318,7 @@ pub fn app_server_config() -> ServerConfig {
 
     for did in [
         0xF100, 0xF186, 0xF18C, 0xF195, // identification
-        0xF200, 0xF201, 0xF202, 0xF203, 0xF204, 0xF205, 0xF206, // sensors
+        0xF201, 0xF202, 0xF203, 0xF204, 0xF205, 0xF206, // sensors
         0xF210, 0xF220, 0xF221, 0xF230, // board state
     ] {
         config = config.with_did(DidConfig::read_only(did, DEF_EXT));
@@ -334,14 +338,6 @@ pub struct AppEcu<B: Board> {
 impl<B: Board> AppEcu<B> {
     pub fn new(board: B, shared: &'static Shared) -> Self {
         let mut dtcs = heapless::Vec::new();
-        let _ = dtcs.push(Dtc {
-            code: DTC_FLUX_CAPACITOR_OVERLOAD,
-            status: 0x2F,
-        });
-        let _ = dtcs.push(Dtc {
-            code: DTC_TEMPORAL_DISPLACEMENT,
-            status: 0x24,
-        });
         for sensor in Sensor::ALL {
             if !board.sensor_ok(sensor) {
                 let _ = dtcs.push(Dtc {
@@ -354,14 +350,10 @@ impl<B: Board> AppEcu<B> {
         let mut display_text = [b' '; 16];
         display_text[..6].copy_from_slice(b"AZ3166");
 
-        let handler = AppHandler {
-            board,
-            shared,
-            vin: *VIN,
-            rgb: [0; 3],
-            display_text,
-            flux_capacitor_power: 1210, // 1.21 GW
-        };
+        shared.vin.set(VIN);
+        shared.rgb.set(&[0; 3]);
+        shared.display_text.set(&display_text);
+        let handler = AppHandler { board, shared };
         Self {
             server: UdsServer::new(
                 app_server_config(),
