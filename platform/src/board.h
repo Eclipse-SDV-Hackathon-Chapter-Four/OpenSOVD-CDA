@@ -5,8 +5,8 @@
  * getting-started guides, Copyright (c) Microsoft Corporation.
  */
 
-#ifndef FLXC1000_BOARD_H
-#define FLXC1000_BOARD_H
+#ifndef AZ3166_BOARD_H
+#define AZ3166_BOARD_H
 
 #include "stm32f4xx_hal.h"
 

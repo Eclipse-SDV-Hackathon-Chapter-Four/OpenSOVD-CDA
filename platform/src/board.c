@@ -244,7 +244,7 @@ void board_init(void)
     I2C1_Init();
     RNG_Init();
 
-    printf("\r\nFLXC1000 AZ3166 starting\r\n");
+    printf("\r\nAZ3166 ECU starting\r\n");
 
     Sensors_Init();
     Display_Init();
@@ -428,14 +428,23 @@ void plat_display_line(uint32_t line, const uint8_t* text, uint32_t len)
     {
         return;
     }
-    i2c_lock();
-    memset(display[line], ' ', DISPLAY_CHARS);
+    char next[DISPLAY_CHARS + 1];
+    memset(next, ' ', DISPLAY_CHARS);
     for (uint32_t i = 0; i < len && i < DISPLAY_CHARS; i++)
     {
-        char c         = (char)text[i];
-        display[line][i] = (c >= 0x20 && c < 0x7F) ? c : ' ';
+        char c  = (char)text[i];
+        next[i] = (c >= 0x20 && c < 0x7F) ? c : ' ';
     }
-    display[line][DISPLAY_CHARS] = '\0';
+    next[DISPLAY_CHARS] = '\0';
+
+    i2c_lock();
+    if (memcmp(display[line], next, sizeof(next)) == 0)
+    {
+        /* Unchanged: skip the ~25 ms I2C transfer. */
+        i2c_unlock();
+        return;
+    }
+    memcpy(display[line], next, sizeof(next));
 
     ssd1306_Fill(Black);
     for (int i = 0; i < DISPLAY_LINES; i++)
@@ -443,6 +452,20 @@ void plat_display_line(uint32_t line, const uint8_t* text, uint32_t len)
         ssd1306_SetCursor(2, (uint8_t)(i * 16));
         ssd1306_WriteString(display[i], Font_7x10, White);
     }
+    ssd1306_UpdateScreen();
+    i2c_unlock();
+}
+
+void plat_display_rotate(uint32_t rotated)
+{
+    if (!display_ok)
+    {
+        return;
+    }
+    i2c_lock();
+    /* COM scan direction and segment remap: both flipped = 180 degrees. */
+    ssd1306_WriteCommand(rotated ? 0xC0 : 0xC8);
+    ssd1306_WriteCommand(rotated ? 0xA0 : 0xA1);
     ssd1306_UpdateScreen();
     i2c_unlock();
 }
