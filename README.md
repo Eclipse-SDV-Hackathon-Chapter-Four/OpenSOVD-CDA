@@ -65,6 +65,7 @@ the matching ODX/PDX/MDD for the Classic Diagnostic Adapter is in [`odx/`](odx/)
 | `tcp0`, `tcp1` | 6 | 3 KiB | DoIP TCP connections (2 concurrent testers) |
 | `udp` | 6 | 2 KiB | vehicle announcement / identification |
 | `routine` | 8 | 2 KiB | watchdog, SelfTest LED cascade, display screens and buttons |
+| `speech` | 9 | 4 KiB | app only: renders speech into the audio output |
 
 ### Bootloader, app slots and rollback
 
@@ -107,7 +108,7 @@ App ──11 01──▶ Boot ──34/36/37 + 11 01──▶ new App (trial) �
 | Wi-Fi LED | on = DHCP address acquired |
 | OLED | firmware version and one screen per readable DID (see below) |
 | LSM6DSL accelerometer | turns the display content by 180° when the board is held upside down |
-| NAU88C10 codec, headphone jack | routine `1002` speaks the temperature (connect headphones or a speaker) |
+| NAU88C10 codec, headphone jack | routine `1005` speaks any text, `1002` the temperature (connect headphones or a speaker) |
 | STM32 unique ID / RNG | DID `F18C` / SecurityAccess seed |
 
 ### Display
@@ -129,7 +130,7 @@ serial number and version. Values refresh every second. Writing the RGB LED
 or the display text through UDS switches to that screen.
 
 On the **Volume** screen, holding a button changes the volume instead (see
-[Temperature announcement](#temperature-announcement)).
+[Speech](#speech)).
 
 When the board is tilted upside down (more than ~0.5 g on the
 accelerometer's display axis), the display content turns by 180° so it stays
@@ -207,17 +208,46 @@ TOKEN=$(curl -s -X POST $B/authorize -H 'Content-Type: application/json' \
 curl -s -H "Authorization: Bearer $TOKEN" $B/components/az3166/data/AmbientTemperature
 ```
 
-## Temperature announcement
+## Speech
 
-Routine `1002` AnnounceTemperature speaks the ambient temperature on the
-headphone jack (connect headphones or an active speaker), e.g. "twenty three
-point five degrees celsius". It works in the Default session:
+The board speaks English text on the headphone jack (connect headphones or an
+active speaker). Two routines work in the Default session:
+
+| Routine | Speaks |
+|---------|--------|
+| `1005` SpeakText | the text in the request: 1–200 characters of printable ASCII |
+| `1002` AnnounceTemperature | "The temperature is 23.5 degrees Celsius." (HTS221, 0.1 °C) |
 
 ```bash
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   $B/components/az3166/locks -d '{"lock_expiration": 300}'
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  $B/components/az3166/operations/SpeakText/executions \
+  -d '{"parameters": {"Text": "Hello world. The answer is 42."}}'
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   $B/components/az3166/operations/AnnounceTemperature/executions -d '{}'
+```
+
+Both run asynchronously in the CDA: the execution reports `Running` until the
+speech has been played (`Completed`). Deleting the execution stops the speech
+(`Aborted`); it must be deleted before the same routine can start again.
+Starting one routine while the other speaks replaces that speech.
+
+Numbers are read as words ("2,048" = "two thousand forty eight", "-3.25" =
+"minus three point two five"), digits glued to letters one by one ("AZ3166" =
+"A Z three one six six"), short all-caps words and words without vowels are
+spelled ("CDA", "SOVD" is in the dictionary). `,` `;` `:` pause briefly, `.`
+`!` `?` end a sentence.
+
+The speech is synthesized on the board by `crates/az3166-speech` (`no_std`, no
+allocation): a pronunciation dictionary and letter-to-sound rules (after the
+public-domain NRL rules) produce phonemes, and a formant synthesizer (after
+Klatt) renders them as 8 kHz PCM. The low-priority `speech` thread feeds the
+samples into a 0.5 s ring buffer that the I2S DMA interrupt plays
+(`platform/src/audio.c`). To listen on the host:
+
+```bash
+cargo run -p az3166-speech --example say -- "Hello world." hello.wav && afplay hello.wav
 ```
 
 The volume starts at 100 % after every reset and changes in 10 % steps:
@@ -230,13 +260,6 @@ The volume starts at 100 % after every reset and changes in 10 % steps:
 
 The codec's headphone output has no analog volume, so the volume is the DAC
 digital gain (register `0x0B`): −50 dB at 1 % up to 0 dB at 100 %, 0 % mutes.
-
-The words are pre-recorded clips (zero–nineteen, the tens, hundred, minus,
-point, degrees, celsius): 4-bit IMA ADPCM at 8 kHz, 66 KB in the app image
-(`platform/assets/speech_words.bin`). They were generated with the macOS
-speech synthesizer by `scripts/make-speech.py`; run it on a Mac to change the
-voice or the words. The codec (I2C `0x1A`) is fed by I2S2 with circular DMA
-(`platform/src/audio.c`).
 
 ## Update the app through the CDA
 
@@ -323,10 +346,7 @@ Own code: Apache-2.0. Files derived from the Azure RTOS getting-started guides
 notice. `vendor/ace-server` is ace-server (Apache-2.0, `vendor/ace-server/LICENSE`)
 with a small patch (`PATCHES.md`); everything else in `third_party/` is fetched. The WICED
 Wi-Fi library and BCM43362 firmware are Cypress property, licensed for use with
-Cypress chips only (the AZ3166's EMW3166 module). The word clips in
-`platform/assets/speech_words.bin` are voice output of Apple's macOS speech
-synthesizer and subject to Apple's license terms, not Apache-2.0 (see
-`speech_words.bin.license`); regenerate them with `scripts/make-speech.py`.
+Cypress chips only (the AZ3166's EMW3166 module).
 
 ## AI disclaimer
 

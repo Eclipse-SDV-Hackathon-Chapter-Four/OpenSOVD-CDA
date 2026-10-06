@@ -29,11 +29,12 @@ the Eclipse OpenSOVD Classic Diagnostic Adapter (CDA).
 | Path | Content |
 |------|---------|
 | `crates/az3166-doip` | sans-IO ISO 13400 DoIP entity (host-tested) |
-| `crates/az3166-ecu` | App/Boot variants, DIDs, DTCs, routines, update package parser, speech words (host-tested); `examples/host_sim.rs` |
+| `crates/az3166-ecu` | App/Boot variants, DIDs, DTCs, routines, update package parser (host-tested); `examples/host_sim.rs` |
+| `crates/az3166-speech` | `no_std` English TTS: text normalization, dictionary + letter-to-sound rules, formant synthesizer, 8 kHz (host-tested); `examples/say.rs` renders a WAV |
 | `crates/az3166-fw` | staticlib: C entry points (`az3166_*`), `Board` impl, display screens, DoIP tasks |
 | `platform/` | C: `main.c` (threads, UDS worker), `bootloader.c`, `boot_state.c`, `update.c`, `net.c`, `board.c`, `audio.c`, linker scripts, CMake |
 | `odx/` | ODX generator (Python + odxtools 11.0.0), `AZ3166.pdx`/`.mdd` (checked in) |
-| `scripts/` | `build.sh`, `flash.sh`, `az3166-flash` (CDA update CLI), `run-cda.sh`, `doip-smoke.py`, `make-images.py`, `make-speech.py`, `fetch-deps.sh`, `setup-toolchain.sh` |
+| `scripts/` | `build.sh`, `flash.sh`, `az3166-flash` (CDA update CLI), `run-cda.sh`, `doip-smoke.py`, `make-images.py`, `fetch-deps.sh`, `setup-toolchain.sh` |
 | `third_party/`, `.toolchain/`, `build/`, `target/` | fetched / generated, ignored |
 
 ## Build and test
@@ -104,7 +105,8 @@ cargo clippy --release --target thumbv7em-none-eabihf -p az3166-fw
 
 - Threads: `uds` (prio 4, 20 KiB: ECU init, Wi-Fi bring-up, then every UDS
   request — the only thread touching the ECU), `tcp0/1` (6, 3 KiB), `udp`
-  (6, 2 KiB), `routine` (8, 2 KiB: watchdog, self test, screens/buttons).
+  (6, 2 KiB), `routine` (8, 2 KiB: watchdog, self test, screens/buttons),
+  `speech` (9, 4 KiB, app only: TTS rendering, lowest priority).
   DoIP threads hand requests to the worker via a ThreadX queue
   (`plat_uds_execute`).
 - RAM: ~128 KiB free in the app. The ECU static is ~11 KiB, mostly
@@ -163,12 +165,22 @@ stay on the git revision.
 
 ## Speech
 
-- Temperature announcement (routine `1002`) plays pre-recorded word clips
-  (`platform/assets/speech_words.bin`, IMA ADPCM 8 kHz, 66 KB in each app
-  image), word ids in `speech_words.h` / `az3166-ecu/src/speech.rs` (same order).
-- Clips come from `scripts/make-speech.py` (macOS `say`, voice Samantha). The
-  audio is Apple voice output, **not Apache-2.0** (`speech_words.bin.license`).
-- Free-form TTS and a PCM upload service were explicitly dropped.
+- Routines `1005` SpeakText (option record = text, 1–200 printable ASCII
+  bytes) and `1002` AnnounceTemperature ("The temperature is 23.5 degrees
+  Celsius."), Default + Extended, Start/Stop/RequestResults. One speaker:
+  starting one replaces the other's speech (it reports Aborted).
+- `crates/az3166-speech`: text -> phonemes (dictionary, NRL-style rules,
+  acronym spelling, numbers to words) -> Klatt-style cascade formant
+  synthesizer (5 ms frames, 8 kHz, f32 via `libm`). Tune by ear with
+  `cargo run -p az3166-speech --example say -- "text" out.wav && afplay out.wav`;
+  levels/rate are constants in `synth.rs` / `lib.rs`.
+- Firmware: the UDS worker posts the text (`az3166-fw/src/speech.rs`,
+  `SeqBytes` + request/cancel/done counters); the `speech` thread renders 128
+  samples at a time into the 4096-sample ring in `audio.c`
+  (`plat_audio_write/free/pending/clear`), which the DMA ISR drains. The
+  routine stays Running until the ring is empty.
+- The earlier Apple word clips (`speech_words.bin`, `make-speech.py`) are gone;
+  all speech is synthesized on the board.
 
 ## CDA usage
 
