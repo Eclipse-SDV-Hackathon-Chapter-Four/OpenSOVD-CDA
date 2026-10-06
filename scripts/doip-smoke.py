@@ -14,7 +14,7 @@ import time
 
 PORT = 13400
 TESTER = 0x0E00
-ECU = 0x1000
+ECU = 0x1001
 
 
 def frame(payload_type: int, payload: bytes) -> bytes:
