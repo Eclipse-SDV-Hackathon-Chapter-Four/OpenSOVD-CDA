@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
+#
+# Speak a text on the AZ3166 headphone jack through the CDA (routine 1005
+# SpeakText). Deletes earlier SpeakText executions first, so it can be run
+# again right away.
+#
+#   scripts/az3166-say "HELLO HACKATHON"
+#   CDA=http://host:20002 scripts/az3166-say "text"
+
+set -euo pipefail
+
+TEXT="${1:?usage: $0 \"text\"}"
+B="${CDA:-http://localhost:20002}/vehicle/v15"
+C="$B/components/az3166"
+
+TOKEN=$(curl -sf -X POST "$B/authorize" -H 'Content-Type: application/json' \
+    -d '{"client_id":"test","client_secret":"test"}' | jq -r .access_token)
+AUTH=(-H "Authorization: Bearer ${TOKEN}")
+JSON=(-H 'Content-Type: application/json')
+
+curl -sf -X POST "${AUTH[@]}" "${JSON[@]}" "$C/locks" -d '{"lock_expiration": 300}' >/dev/null
+
+for id in $(curl -sf "${AUTH[@]}" "$C/operations/SpeakText/executions" | jq -r '.items[].id'); do
+    curl -sf -X DELETE "${AUTH[@]}" "$C/operations/SpeakText/executions/$id" >/dev/null
+done
+
+curl -sf -X POST "${AUTH[@]}" "${JSON[@]}" "$C/operations/SpeakText/executions" \
+    -d "$(jq -n --arg text "$TEXT" '{parameters: {Text: $text}}')" | jq -c .
