@@ -18,7 +18,7 @@
 use core::fmt::Write;
 use core::sync::atomic::{AtomicU16, Ordering};
 
-use az3166_ecu::{read_did, Shared};
+use az3166_ecu::{read_did, Shared, VOLUME_MAX, VOLUME_STEP};
 
 use az3166_ecu::Board;
 
@@ -90,6 +90,11 @@ const APP_SCREENS: &[Screen] = &[
         did: 0xF212,
         title: "Display text",
         format: fmt_ascii,
+    },
+    Screen {
+        did: 0xF213,
+        title: "Volume",
+        format: fmt_volume,
     },
     Screen {
         did: 0xF220,
@@ -174,11 +179,21 @@ pub struct Ui {
     is_app: bool,
     index: usize,
     last_buttons: u8,
+    /// Per button (A, B): how long it has been held, and whether a long
+    /// press already acted during this hold.
+    held_ms: [u32; 2],
+    long_press_fired: [bool; 2],
+    next_repeat_ms: [u32; 2],
     since_refresh_ms: u32,
     since_orientation_ms: u32,
     rotated: bool,
     dirty: bool,
 }
+
+/// Long press on the Volume screen: first step after this, then repeating.
+const LONG_PRESS_MS: u32 = 600;
+const LONG_PRESS_REPEAT_MS: u32 = 300;
+const VOLUME_DID: u16 = 0xF213;
 
 impl Ui {
     pub fn new(is_app: bool) -> Self {
@@ -187,6 +202,9 @@ impl Ui {
             is_app,
             index: 0,
             last_buttons: 0,
+            held_ms: [0; 2],
+            long_press_fired: [false; 2],
+            next_repeat_ms: [0; 2],
             since_refresh_ms: 0,
             since_orientation_ms: 0,
             rotated: false,
@@ -200,18 +218,44 @@ impl Ui {
     pub fn update(&mut self, shared: &Shared, elapsed_ms: u32) {
         let buttons = sys::buttons();
         let pressed = buttons & !self.last_buttons;
+        let released = !buttons & self.last_buttons;
         self.last_buttons = buttons;
-        let n = self.screens.len();
         // A: previous, B: next. Upside down the buttons swap sides, so they
         // swap roles too: the left button always goes back.
-        let (previous, next) = if self.rotated { (0x02, 0x01) } else { (0x01, 0x02) };
-        if pressed & previous != 0 {
-            self.index = (self.index + n - 1) % n;
-            self.dirty = true;
-        }
-        if pressed & next != 0 {
-            self.index = (self.index + 1) % n;
-            self.dirty = true;
+        let (previous, next) = if self.rotated {
+            (0x02, 0x01)
+        } else {
+            (0x01, 0x02)
+        };
+
+        if self.screens[self.index].did == VOLUME_DID {
+            // Volume screen: hold = volume down / up, tap (on release) = page.
+            for (bit, up) in [(previous, false), (next, true)] {
+                let i = (bit >> 1) as usize; // A = 0, B = 1
+                if buttons & bit != 0 {
+                    if pressed & bit != 0 {
+                        self.held_ms[i] = 0;
+                        self.long_press_fired[i] = false;
+                        self.next_repeat_ms[i] = LONG_PRESS_MS;
+                    }
+                    self.held_ms[i] += elapsed_ms;
+                    if self.held_ms[i] >= self.next_repeat_ms[i] {
+                        self.next_repeat_ms[i] = self.held_ms[i] + LONG_PRESS_REPEAT_MS;
+                        self.long_press_fired[i] = true;
+                        change_volume(shared, up);
+                        self.dirty = true;
+                    }
+                } else if released & bit != 0 && !self.long_press_fired[i] {
+                    self.page(up);
+                }
+            }
+        } else {
+            if pressed & previous != 0 {
+                self.page(false);
+            }
+            if pressed & next != 0 {
+                self.page(true);
+            }
         }
         let requested = REQUESTED.swap(NO_REQUEST, Ordering::Relaxed);
         if let Some(i) = self.screens.iter().position(|s| s.did == requested) {
@@ -231,6 +275,18 @@ impl Ui {
             self.dirty = false;
             self.since_refresh_ms = 0;
         }
+    }
+
+    fn page(&mut self, forward: bool) {
+        let n = self.screens.len();
+        self.index = if forward {
+            (self.index + 1) % n
+        } else {
+            (self.index + n - 1) % n
+        };
+        self.dirty = true;
+        // A button still held on the new screen must not act as a long press.
+        self.long_press_fired = [true; 2];
     }
 
     fn update_orientation(&mut self) {
@@ -297,6 +353,18 @@ impl Ui {
         sys::display_line(2, first.as_bytes());
         sys::display_line(3, second.as_bytes());
     }
+}
+
+/// One volume step, like the VolumeUp / VolumeDown routines.
+fn change_volume(shared: &Shared, up: bool) {
+    let current = shared.volume.load(Ordering::SeqCst);
+    let volume = if up {
+        current.saturating_add(VOLUME_STEP).min(VOLUME_MAX)
+    } else {
+        current.saturating_sub(VOLUME_STEP)
+    };
+    shared.volume.store(volume, Ordering::SeqCst);
+    Az3166.set_volume(volume);
 }
 
 // ---- value formatting (integers only: no float formatting code) ----------
@@ -381,6 +449,21 @@ fn fmt_ascii(b: &[u8], first: &mut Line, _: &mut Line) {
             ' '
         });
     }
+}
+
+fn fmt_volume(b: &[u8], first: &mut Line, second: &mut Line) {
+    let percent = b[0].min(100);
+    if percent == 0 {
+        let _ = first.push_str("0 % (mute)");
+    } else {
+        let _ = write!(first, "{} %", percent);
+    }
+    // 10-step bar
+    let _ = second.push('[');
+    for i in 0..10 {
+        let _ = second.push(if i < percent / 10 { '#' } else { '.' });
+    }
+    let _ = second.push(']');
 }
 
 fn fmt_ip(b: &[u8], first: &mut Line, _: &mut Line) {
