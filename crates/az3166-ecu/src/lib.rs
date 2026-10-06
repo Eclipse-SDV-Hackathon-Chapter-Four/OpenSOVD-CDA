@@ -20,7 +20,6 @@
 pub mod app;
 pub mod board;
 pub mod boot;
-pub mod speech;
 pub mod update;
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
@@ -106,8 +105,6 @@ pub struct Shared {
     pub routine_status: AtomicU8,
     /// Set by RoutineControl Start, consumed by the routine task.
     pub routine_start: AtomicBool,
-    /// AnnounceTemperature routine: aborted by Stop (else completed when done).
-    pub announce_status: AtomicU8,
     /// Audio output volume in percent (DID F213).
     pub volume: AtomicU8,
     /// App data writable by WriteDataByIdentifier.
@@ -123,7 +120,6 @@ impl Shared {
             session_type: AtomicU8::new(0x01),
             routine_status: AtomicU8::new(ROUTINE_IDLE),
             routine_start: AtomicBool::new(false),
-            announce_status: AtomicU8::new(ROUTINE_IDLE),
             volume: AtomicU8::new(VOLUME_MAX),
             vin: SeqBytes::new(),
             rgb: SeqBytes::new(),

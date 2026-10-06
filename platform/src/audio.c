@@ -7,9 +7,9 @@
  * channel 0 at 8 kHz.
  *
  * The DMA runs continuously in circular mode on a two-half stereo buffer;
- * the half-/full-transfer interrupt refills the half just played with the
- * next samples of the queued word clips (IMA ADPCM, speech_words.h), or with
- * silence. Running all the time avoids start/stop clicks.
+ * the half-/full-transfer interrupt refills the half just played from a
+ * sample ring buffer (filled by the speech thread), or with silence.
+ * Running all the time avoids start/stop clicks.
  *
  * I2S and DMA are driven at register level: the HAL configuration of the
  * board support package does not enable the I2S module.
@@ -24,7 +24,6 @@
 
 #include "board.h"
 #include "platform.h"
-#include "speech_words.h"
 
 #define CODEC_ADDRESS (0x1Au << 1)
 #define CODEC_ID_REG  0x40u
@@ -40,34 +39,18 @@
 #define I2S_MASTER_TX 2u
 
 #define FRAMES_PER_HALF 256u /* 32 ms at 8 kHz */
-#define MAX_QUEUE       16u
-
-extern const uint8_t speech_words_bin[];
+#define RING_SIZE       4096u /* samples, power of two: 0.5 s at 8 kHz */
 
 /* Stereo frames (left, right); the codec plays the left slot. */
 static int16_t dma_buffer[2u * FRAMES_PER_HALF * 2u];
 
 static int audio_ok;
 
-/* Playback state, shared with the DMA interrupt. */
-static volatile uint8_t queue[MAX_QUEUE];
-static volatile uint32_t queue_len;
-static volatile uint32_t queue_pos;
-static volatile int playing;
-
-/* Current clip (IMA ADPCM decoder) */
-static const uint8_t* clip;
-static uint32_t clip_samples;
-static uint32_t clip_pos;
-static int32_t predictor;
-static int32_t step_index;
-
-static const int8_t index_table[8] = {-1, -1, -1, -1, 2, 4, 6, 8};
-static const uint16_t step_table[89] = {7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37,
-    41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337,
-    371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272,
-    2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487,
-    12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767};
+/* Mono sample ring: one producer (plat_audio_write), one consumer (the DMA
+ * interrupt). Free-running indexes, masked on access. */
+static int16_t ring[RING_SIZE];
+static volatile uint32_t ring_head; /* written by the producer */
+static volatile uint32_t ring_tail; /* written by the interrupt */
 
 /* ---- codec --------------------------------------------------------------- */
 
@@ -219,84 +202,25 @@ static void i2s_dma_start(void)
 
 /* ---- playback ------------------------------------------------------------ */
 
-static int start_next_clip(void)
-{
-    while (queue_pos < queue_len)
-    {
-        uint8_t word = queue[queue_pos++];
-        if (word < SPEECH_WORD_COUNT)
-        {
-            clip         = &speech_words_bin[speech_clips[word].offset];
-            clip_samples = speech_clips[word].samples;
-            clip_pos     = 0;
-            predictor    = 0;
-            step_index   = 0;
-            return 1;
-        }
-    }
-    return 0;
-}
-
-static int16_t next_sample(void)
-{
-    if (clip == NULL || clip_pos >= clip_samples)
-    {
-        clip = NULL;
-        if (!start_next_clip())
-        {
-            playing = 0;
-            return 0;
-        }
-    }
-
-    uint8_t byte = clip[clip_pos / 2];
-    uint8_t code = (clip_pos & 1u) ? (byte >> 4) : (byte & 0x0F);
-    clip_pos++;
-
-    int32_t step = step_table[step_index];
-    int32_t diff = step >> 3;
-    if (code & 4)
-    {
-        diff += step;
-    }
-    if (code & 2)
-    {
-        diff += step >> 1;
-    }
-    if (code & 1)
-    {
-        diff += step >> 2;
-    }
-    predictor += (code & 8) ? -diff : diff;
-    if (predictor > 32767)
-    {
-        predictor = 32767;
-    }
-    else if (predictor < -32768)
-    {
-        predictor = -32768;
-    }
-    step_index += index_table[code & 7];
-    if (step_index < 0)
-    {
-        step_index = 0;
-    }
-    else if (step_index > 88)
-    {
-        step_index = 88;
-    }
-    return (int16_t)predictor;
-}
-
 static void fill(uint32_t half)
 {
     int16_t* frames = &dma_buffer[half * FRAMES_PER_HALF * 2u];
+    uint32_t tail   = ring_tail;
+    uint32_t head   = ring_head;
+    __DMB(); /* samples before head are written */
     for (uint32_t i = 0; i < FRAMES_PER_HALF; i++)
     {
-        int16_t sample    = playing ? next_sample() : 0;
+        int16_t sample = 0;
+        if (tail != head)
+        {
+            sample = ring[tail & (RING_SIZE - 1u)];
+            tail++;
+        }
         frames[2 * i]     = sample;
         frames[2 * i + 1] = sample;
     }
+    __DMB();
+    ring_tail = tail;
 }
 
 void DMA1_Stream4_IRQHandler(void)
@@ -356,40 +280,42 @@ void audio_init(void)
     printf("Audio: %s\r\n", audio_ok ? "NAU88C10 ready (headphone jack, 8 kHz)" : "unavailable");
 }
 
-int32_t plat_audio_say(const uint8_t* words, uint32_t len)
+int32_t plat_audio_ok(void)
 {
-    if (!audio_ok)
-    {
-        return 0;
-    }
-    if (len > MAX_QUEUE)
-    {
-        len = MAX_QUEUE;
-    }
-    NVIC_DisableIRQ(DMA1_Stream4_IRQn);
-    for (uint32_t i = 0; i < len; i++)
-    {
-        queue[i] = words[i];
-    }
-    queue_len = len;
-    queue_pos = 0;
-    clip      = NULL;
-    playing   = len > 0;
-    NVIC_EnableIRQ(DMA1_Stream4_IRQn);
-    return 1;
+    return audio_ok;
 }
 
-int32_t plat_audio_busy(void)
+uint32_t plat_audio_free(void)
 {
-    return playing;
+    return RING_SIZE - (ring_head - ring_tail);
 }
 
-void plat_audio_stop(void)
+uint32_t plat_audio_pending(void)
 {
+    return ring_head - ring_tail;
+}
+
+uint32_t plat_audio_write(const int16_t* samples, uint32_t count)
+{
+    uint32_t head = ring_head;
+    uint32_t free = RING_SIZE - (head - ring_tail);
+    if (count > free)
+    {
+        count = free;
+    }
+    for (uint32_t i = 0; i < count; i++)
+    {
+        ring[(head + i) & (RING_SIZE - 1u)] = samples[i];
+    }
+    __DMB(); /* samples before the new head */
+    ring_head = head + count;
+    return count;
+}
+
+void plat_audio_clear(void)
+{
+    /* Only the producer calls this: drop everything not yet played. */
     NVIC_DisableIRQ(DMA1_Stream4_IRQn);
-    queue_len = 0;
-    queue_pos = 0;
-    clip      = NULL;
-    playing   = 0;
+    ring_tail = ring_head;
     NVIC_EnableIRQ(DMA1_Stream4_IRQn);
 }

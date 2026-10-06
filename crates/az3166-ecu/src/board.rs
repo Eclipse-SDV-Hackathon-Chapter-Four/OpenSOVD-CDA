@@ -40,6 +40,9 @@ impl Sensor {
 /// Number of LEDs in the self-test "LED bar".
 pub const LED_COUNT: usize = 5;
 
+/// Longest text for [`Board::speak`], in bytes.
+pub const MAX_SPEECH_TEXT: usize = 200;
+
 /// Writing the persistent boot state to flash failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FlashError;
@@ -82,13 +85,14 @@ pub trait Board {
     /// Marks the slot at `base` as installed (on trial) and the App to run.
     fn update_commit(&self, base: u32) -> Result<(), FlashError>;
 
-    /// Starts speaking the word clips `words` (see `speech`) on the audio
-    /// output. False if audio is unavailable.
-    fn announce(&self, words: &[u8]) -> bool;
-    /// True while an announcement is playing.
-    fn announcing(&self) -> bool;
-    /// Stops an announcement.
-    fn announce_stop(&self);
+    /// Starts speaking `text` (printable ASCII, at most
+    /// [`MAX_SPEECH_TEXT`] bytes) on the audio output, replacing anything
+    /// still being spoken. False if audio is unavailable.
+    fn speak(&self, text: &str) -> bool;
+    /// True while speaking.
+    fn speaking(&self) -> bool;
+    /// Stops speaking.
+    fn speak_stop(&self);
     /// Sets the audio output volume, 0..=100 % (0 = mute).
     fn set_volume(&self, percent: u8);
 }

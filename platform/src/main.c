@@ -15,6 +15,8 @@
  *   tcp0/1   (6,  3 KiB) DoIP TCP connections (az3166_tcp_task)
  *   udp      (6,  2 KiB) DoIP vehicle identification (az3166_udp_task)
  *   routine  (8,  2 KiB) LED self-test, display (az3166_routine_task)
+ *   speech   (9,  4 KiB) App only: text-to-speech into the audio output
+ *                        (az3166_speech_task)
  */
 
 #include <stdio.h>
@@ -49,10 +51,12 @@ void syscalls_rtos_init(void);
 #define TCP_STACK_SIZE     (3 * 1024)
 #define UDP_STACK_SIZE     (2 * 1024)
 #define ROUTINE_STACK_SIZE (2 * 1024)
+#define SPEECH_STACK_SIZE  (4 * 1024)
 
 #define UDS_PRIORITY     4
 #define NET_PRIORITY     6
 #define ROUTINE_PRIORITY 8
+#define SPEECH_PRIORITY  9
 
 #define UDS_TICK_MS 100
 
@@ -66,6 +70,10 @@ static TX_THREAD uds_thread;
 static TX_THREAD tcp_threads[PLAT_TCP_SLOTS];
 static TX_THREAD udp_thread;
 static TX_THREAD routine_thread;
+#ifdef FW_IMAGE_APP
+static TX_THREAD speech_thread;
+static ULONG speech_stack[SPEECH_STACK_SIZE / sizeof(ULONG)];
+#endif
 
 static ULONG uds_stack[UDS_STACK_SIZE / sizeof(ULONG)];
 static ULONG tcp_stacks[PLAT_TCP_SLOTS][TCP_STACK_SIZE / sizeof(ULONG)];
@@ -217,6 +225,14 @@ static void routine_thread_entry(ULONG parameter)
     az3166_routine_task();
 }
 
+#ifdef FW_IMAGE_APP
+static void speech_thread_entry(ULONG parameter)
+{
+    (void)parameter;
+    az3166_speech_task();
+}
+#endif
+
 void tx_application_define(void* first_unused_memory)
 {
     (void)first_unused_memory;
@@ -240,6 +256,11 @@ void tx_application_define(void* first_unused_memory)
         ROUTINE_PRIORITY, ROUTINE_PRIORITY, TX_NO_TIME_SLICE, TX_DONT_START);
 
 #ifdef FW_IMAGE_APP
+    /* Lowest priority: renders in the idle time, the watchdog kick in the
+     * routine thread stays above it. */
+    tx_thread_create(&speech_thread, "speech", speech_thread_entry, 0, speech_stack, sizeof(speech_stack),
+        SPEECH_PRIORITY, SPEECH_PRIORITY, TX_NO_TIME_SLICE, TX_AUTO_START);
+
     if (on_trial())
     {
         printf("Trial: slot %c must come up within %d s\r\n", 'A' + own_slot(), TRIAL_DEADLINE_S);

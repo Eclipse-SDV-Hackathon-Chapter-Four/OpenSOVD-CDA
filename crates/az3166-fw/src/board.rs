@@ -121,16 +121,17 @@ impl Board for Az3166 {
         }
     }
 
-    fn announce(&self, words: &[u8]) -> bool {
-        unsafe { sys::plat_audio_say(words.as_ptr(), words.len() as u32) != 0 }
+    fn speak(&self, text: &str) -> bool {
+        let audio_ok = unsafe { sys::plat_audio_ok() } != 0;
+        audio_ok && crate::speech::request(text)
     }
 
-    fn announcing(&self) -> bool {
-        unsafe { sys::plat_audio_busy() != 0 }
+    fn speaking(&self) -> bool {
+        crate::speech::busy()
     }
 
-    fn announce_stop(&self) {
-        unsafe { sys::plat_audio_stop() }
+    fn speak_stop(&self) {
+        crate::speech::stop()
     }
 
     fn set_volume(&self, percent: u8) {

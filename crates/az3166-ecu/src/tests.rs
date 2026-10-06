@@ -23,8 +23,8 @@ struct BoardState {
     flash: Vec<(u32, Vec<u8>)>,
     erased: Option<u32>,
     committed: Option<u32>,
-    announced: Vec<u8>,
-    announcing: bool,
+    spoken: String,
+    speaking: bool,
     volume: Option<u8>,
 }
 
@@ -135,17 +135,17 @@ impl Board for FakeBoard {
         s.boot_state = Some(BootState::AppValid);
         Ok(())
     }
-    fn announce(&self, words: &[u8]) -> bool {
+    fn speak(&self, text: &str) -> bool {
         let mut s = self.state();
-        s.announced = words.to_vec();
-        s.announcing = true;
+        s.spoken = text.into();
+        s.speaking = true;
         true
     }
-    fn announcing(&self) -> bool {
-        self.state().announcing
+    fn speaking(&self) -> bool {
+        self.state().speaking
     }
-    fn announce_stop(&self) {
-        self.state().announcing = false;
+    fn speak_stop(&self) {
+        self.state().speaking = false;
     }
     fn set_volume(&self, percent: u8) {
         self.state().volume = Some(percent);
@@ -310,7 +310,6 @@ fn self_test_needs_extended_session() {
 
 #[test]
 fn announce_temperature() {
-    use crate::speech::*;
     let mut h = Harness::new(BootState::AppValid);
     // Default session is enough; -12.34 C -> "minus twelve point three ..."
     assert_eq!(
@@ -322,15 +321,15 @@ fn announce_temperature() {
         [0x71, 0x01, 0x10, 0x02, ROUTINE_RUNNING]
     );
     assert_eq!(
-        h.board.state().announced,
-        [MINUS, 12, POINT, 3, DEGREES, CELSIUS]
+        h.board.state().spoken,
+        "The temperature is -12.3 degrees Celsius."
     );
     assert_eq!(h.req(&[0x31, 0x01, 0x10, 0x02]), [0x7F, 0x31, 0x24]);
     assert_eq!(
         h.req(&[0x31, 0x03, 0x10, 0x02]),
         [0x71, 0x03, 0x10, 0x02, ROUTINE_RUNNING]
     );
-    h.board.state().announcing = false; // playback finished
+    h.board.state().speaking = false; // speech finished
     assert_eq!(
         h.req(&[0x31, 0x03, 0x10, 0x02]),
         [0x71, 0x03, 0x10, 0x02, ROUTINE_COMPLETED]
@@ -354,7 +353,7 @@ fn announce_temperature_stop() {
         h.req(&[0x31, 0x02, 0x10, 0x02]),
         [0x71, 0x02, 0x10, 0x02, ROUTINE_ABORTED]
     );
-    assert!(!h.board.state().announcing);
+    assert!(!h.board.state().speaking);
     assert_eq!(
         h.req(&[0x31, 0x03, 0x10, 0x02]),
         [0x71, 0x03, 0x10, 0x02, ROUTINE_ABORTED]
@@ -367,6 +366,54 @@ fn announce_needs_working_sensor() {
     board.state().broken.push(Sensor::HumidityTemperature);
     let mut h = Harness::with_board(BootState::AppValid, board);
     assert_eq!(h.req(&[0x31, 0x01, 0x10, 0x02]), [0x7F, 0x31, 0x22]);
+}
+
+#[test]
+fn speak_text() {
+    let mut h = Harness::new(BootState::AppValid);
+    let mut req = vec![0x31, 0x01, 0x10, 0x05];
+    req.extend_from_slice(b"Hello, world.");
+    assert_eq!(h.req(&req), [0x71, 0x01, 0x10, 0x05, ROUTINE_RUNNING]);
+    assert_eq!(h.board.state().spoken, "Hello, world.");
+    assert_eq!(h.req(&req), [0x7F, 0x31, 0x24]);
+    h.board.state().speaking = false;
+    assert_eq!(
+        h.req(&[0x31, 0x03, 0x10, 0x05]),
+        [0x71, 0x03, 0x10, 0x05, ROUTINE_COMPLETED]
+    );
+}
+
+#[test]
+fn speak_text_checks_the_text() {
+    let mut h = Harness::new(BootState::AppValid);
+    assert_eq!(h.req(&[0x31, 0x01, 0x10, 0x05]), [0x7F, 0x31, 0x13]);
+    assert_eq!(
+        h.req(&[0x31, 0x01, 0x10, 0x05, b'a', 0x07]),
+        [0x7F, 0x31, 0x31]
+    );
+    let mut req = vec![0x31, 0x01, 0x10, 0x05];
+    req.extend_from_slice(&[b'a'; board::MAX_SPEECH_TEXT + 1]);
+    assert_eq!(h.req(&req), [0x7F, 0x31, 0x31]);
+    assert!(!h.board.state().speaking);
+}
+
+#[test]
+fn speech_routines_replace_each_other() {
+    let mut h = Harness::new(BootState::AppValid);
+    h.req(&[0x31, 0x01, 0x10, 0x02]);
+    assert_eq!(
+        h.req(&[0x31, 0x01, 0x10, 0x05, b'h', b'i']),
+        [0x71, 0x01, 0x10, 0x05, ROUTINE_RUNNING]
+    );
+    assert_eq!(h.board.state().spoken, "hi");
+    assert_eq!(
+        h.req(&[0x31, 0x03, 0x10, 0x02]),
+        [0x71, 0x03, 0x10, 0x02, ROUTINE_ABORTED]
+    );
+    assert_eq!(
+        h.req(&[0x31, 0x03, 0x10, 0x05]),
+        [0x71, 0x03, 0x10, 0x05, ROUTINE_RUNNING]
+    );
 }
 
 #[test]

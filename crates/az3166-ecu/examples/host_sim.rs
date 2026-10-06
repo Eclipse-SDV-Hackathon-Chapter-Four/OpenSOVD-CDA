@@ -111,14 +111,14 @@ impl Board for SimBoard {
         cells.copy_from_slice(data);
         Ok(())
     }
-    fn announce(&self, words: &[u8]) -> bool {
-        println!("[board] announce words {:?}", words);
+    fn speak(&self, text: &str) -> bool {
+        println!("[board] speak {:?}", text);
         true
     }
-    fn announcing(&self) -> bool {
+    fn speaking(&self) -> bool {
         false
     }
-    fn announce_stop(&self) {}
+    fn speak_stop(&self) {}
     fn set_volume(&self, percent: u8) {
         println!("[board] volume {}%", percent);
     }

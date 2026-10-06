@@ -84,6 +84,7 @@ version = "0.2.0"
 dependencies = [
  "az3166-doip",
  "az3166-ecu",
+ "az3166-speech",
  "heapless",
 ]
 

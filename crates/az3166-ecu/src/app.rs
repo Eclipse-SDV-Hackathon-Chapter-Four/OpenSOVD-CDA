@@ -23,11 +23,11 @@ use ace_server::security_provider::{SecurityError, SecurityProvider};
 use ace_server::server::UdsServer;
 use ace_sim::io::NodeAddress;
 
-use crate::board::{Board, BootState, FlashError, Sensor, LED_COUNT};
-use crate::speech;
+use crate::board::{Board, BootState, FlashError, Sensor, LED_COUNT, MAX_SPEECH_TEXT};
 use crate::{
     common_did, Policy, Shared, ECU_ADDRESS, FUNCTIONAL_ADDRESS, OUTBOX, RESET_HARD,
-    ROUTINE_ABORTED, ROUTINE_COMPLETED, ROUTINE_RUNNING, VIN, VOLUME_MAX, VOLUME_STEP,
+    ROUTINE_ABORTED, ROUTINE_COMPLETED, ROUTINE_IDLE, ROUTINE_RUNNING, VIN, VOLUME_MAX,
+    VOLUME_STEP,
 };
 
 /// App variant identification: DID 0xF100 = 0x000101
@@ -37,6 +37,9 @@ const ROUTINE_SELF_TEST: u16 = 0x1001;
 const ROUTINE_ANNOUNCE_TEMPERATURE: u16 = 0x1002;
 const ROUTINE_VOLUME_UP: u16 = 0x1003;
 const ROUTINE_VOLUME_DOWN: u16 = 0x1004;
+const ROUTINE_SPEAK_TEXT: u16 = 0x1005;
+/// Routines that speak; one at a time has the audio output.
+const SPEECH_ROUTINES: [u16; 2] = [ROUTINE_ANNOUNCE_TEMPERATURE, ROUTINE_SPEAK_TEXT];
 const SESSION_EXTENDED: u8 = 0x03;
 
 /// PWM duty cycles for each LED of the bar — increasing brightness.
@@ -155,6 +158,9 @@ pub fn read_did<B: Board>(
 pub struct AppHandler<B: Board> {
     board: B,
     shared: &'static Shared,
+    /// Status of each of `SPEECH_ROUTINES`: running until the speech ends
+    /// (completed), is stopped or is replaced by another (aborted).
+    speech_status: [u8; SPEECH_ROUTINES.len()],
 }
 
 /// Converts a physical value to its raw value, rounded to nearest.
@@ -248,7 +254,7 @@ impl<B: Board> ServerHandler for AppHandler<B> {
         &mut self,
         routine_id: u16,
         sub_function: u8,
-        _data: &[u8],
+        data: &[u8],
         buf: &mut [u8],
     ) -> Result<usize, BuiltinNrc> {
         match routine_id {
@@ -259,7 +265,9 @@ impl<B: Board> ServerHandler for AppHandler<B> {
                     return Err(BuiltinNrc::ConditionsNotCorrect);
                 }
             }
-            ROUTINE_ANNOUNCE_TEMPERATURE => return self.announce_temperature(sub_function, buf),
+            ROUTINE_ANNOUNCE_TEMPERATURE | ROUTINE_SPEAK_TEXT => {
+                return self.speech_routine(routine_id, sub_function, data, buf)
+            }
             ROUTINE_VOLUME_UP | ROUTINE_VOLUME_DOWN => {
                 return self.change_volume(routine_id == ROUTINE_VOLUME_UP, sub_function, buf)
             }
@@ -324,48 +332,61 @@ impl<B: Board> AppHandler<B> {
         self.board.set_volume(volume);
     }
 
-    /// RoutineControl 0x1002: speak the ambient temperature.
-    fn announce_temperature(
+    /// RoutineControl 0x1002 AnnounceTemperature (speaks the ambient
+    /// temperature) and 0x1005 SpeakText (speaks the text in the option
+    /// record): Start, Stop, RequestResults.
+    fn speech_routine(
         &mut self,
+        routine_id: u16,
         sub_function: u8,
+        data: &[u8],
         buf: &mut [u8],
     ) -> Result<usize, BuiltinNrc> {
-        let status = &self.shared.announce_status;
-        let current = match status.load(Ordering::SeqCst) {
-            ROUTINE_RUNNING if !self.board.announcing() => {
-                status.store(ROUTINE_COMPLETED, Ordering::SeqCst);
-                ROUTINE_COMPLETED
-            }
-            s => s,
-        };
+        let index = SPEECH_ROUTINES
+            .iter()
+            .position(|&id| id == routine_id)
+            .ok_or(BuiltinNrc::RequestOutOfRange)?;
+        self.refresh_speech_status();
+        let current = self.speech_status[index];
         match sub_function {
             0x01 => {
                 if current == ROUTINE_RUNNING {
                     return Err(BuiltinNrc::RequestSequenceError);
                 }
-                let (temperature, _) = self
-                    .board
-                    .temperature_humidity()
-                    .ok_or(BuiltinNrc::ConditionsNotCorrect)?;
-                let tenths = i16::from_be_bytes(scaled_i16(temperature, 0.1)) as i32;
-                if !self.board.announce(&speech::temperature_words(tenths)) {
+                let mut text = heapless::String::<MAX_SPEECH_TEXT>::new();
+                if routine_id == ROUTINE_SPEAK_TEXT {
+                    text.push_str(speech_text(data)?)
+                        .map_err(|_| BuiltinNrc::RequestOutOfRange)?;
+                } else {
+                    let (temperature, _) = self
+                        .board
+                        .temperature_humidity()
+                        .ok_or(BuiltinNrc::ConditionsNotCorrect)?;
+                    let tenths = i16::from_be_bytes(scaled_i16(temperature, 0.1));
+                    temperature_text(tenths, &mut text);
+                }
+                if !self.board.speak(&text) {
                     return Err(BuiltinNrc::ConditionsNotCorrect);
                 }
-                status.store(ROUTINE_RUNNING, Ordering::SeqCst);
+                // The other speech routine (if running) lost the output.
+                for status in self.speech_status.iter_mut() {
+                    if *status == ROUTINE_RUNNING {
+                        *status = ROUTINE_ABORTED;
+                    }
+                }
+                self.speech_status[index] = ROUTINE_RUNNING;
                 buf[0] = ROUTINE_RUNNING;
                 Ok(1)
             }
             0x02 => {
-                // A finished announcement is acknowledged with its status, so
-                // a tester (e.g. the CDA deleting its execution) can always
+                // A finished routine is acknowledged with its status, so a
+                // tester (e.g. the CDA deleting its execution) can always
                 // stop it.
                 if current == ROUTINE_RUNNING {
-                    self.board.announce_stop();
-                    status.store(ROUTINE_ABORTED, Ordering::SeqCst);
-                    buf[0] = ROUTINE_ABORTED;
-                } else {
-                    buf[0] = current;
+                    self.board.speak_stop();
+                    self.speech_status[index] = ROUTINE_ABORTED;
                 }
+                buf[0] = self.speech_status[index];
                 Ok(1)
             }
             0x03 => {
@@ -375,6 +396,41 @@ impl<B: Board> AppHandler<B> {
             _ => Err(BuiltinNrc::SubFunctionNotSupported),
         }
     }
+
+    /// A running speech routine has completed once the speech ended.
+    fn refresh_speech_status(&mut self) {
+        if !self.board.speaking() {
+            for status in self.speech_status.iter_mut() {
+                if *status == ROUTINE_RUNNING {
+                    *status = ROUTINE_COMPLETED;
+                }
+            }
+        }
+    }
+}
+
+/// The SpeakText option record: 1..=MAX_SPEECH_TEXT printable ASCII bytes.
+fn speech_text(data: &[u8]) -> Result<&str, BuiltinNrc> {
+    if data.is_empty() {
+        return Err(BuiltinNrc::IncorrectMessageLengthOrInvalidFormat);
+    }
+    if data.len() > MAX_SPEECH_TEXT || !data.iter().all(|c| (0x20..0x7F).contains(c)) {
+        return Err(BuiltinNrc::RequestOutOfRange);
+    }
+    core::str::from_utf8(data).map_err(|_| BuiltinNrc::RequestOutOfRange)
+}
+
+/// "The temperature is -12.3 degrees Celsius." (from tenths of a degree)
+fn temperature_text(tenths: i16, out: &mut heapless::String<MAX_SPEECH_TEXT>) {
+    use core::fmt::Write;
+    let sign = if tenths < 0 { "-" } else { "" };
+    let abs = tenths.unsigned_abs();
+    let _ = write!(
+        out,
+        "The temperature is {sign}{}.{} degrees Celsius.",
+        abs / 10,
+        abs % 10
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -462,7 +518,11 @@ impl<B: Board> AppEcu<B> {
         shared.vin.set(VIN);
         shared.rgb.set(&[0; 3]);
         shared.display_text.set(&display_text);
-        let handler = AppHandler { board, shared };
+        let handler = AppHandler {
+            board,
+            shared,
+            speech_status: [ROUTINE_IDLE; SPEECH_ROUTINES.len()],
+        };
         Self {
             server: UdsServer::new(
                 app_server_config(),

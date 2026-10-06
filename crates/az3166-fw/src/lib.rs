@@ -12,7 +12,8 @@
 //! - UDS worker: [`az3166_init`], then [`az3166_uds_execute`] per request
 //!   and [`az3166_uds_tick`] every 100 ms. Only this thread touches the ECU.
 //! - [`az3166_tcp_task`] per DoIP TCP slot, [`az3166_udp_task`] for
-//!   vehicle identification, [`az3166_routine_task`] for the LED self-test.
+//!   vehicle identification, [`az3166_routine_task`] for the LED self-test,
+//!   [`az3166_speech_task`] (App only) renders speech to the audio output.
 
 #![no_std]
 
@@ -21,6 +22,7 @@ mod board;
 mod log;
 mod net;
 mod screens;
+mod speech;
 mod sys;
 
 use core::cell::UnsafeCell;
@@ -32,6 +34,7 @@ use az3166_ecu::{app, BootState, Ecu, Shared, VIN};
 use board::Az3166;
 
 pub use net::{az3166_tcp_task, az3166_udp_task};
+pub use speech::az3166_speech_task;
 
 static SHARED: Shared = Shared::new();
 

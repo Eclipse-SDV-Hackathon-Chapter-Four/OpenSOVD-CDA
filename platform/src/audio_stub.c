@@ -7,19 +7,29 @@
 
 #include "platform.h"
 
-int32_t plat_audio_say(const uint8_t* words, uint32_t len)
-{
-    (void)words;
-    (void)len;
-    return 0;
-}
-
-int32_t plat_audio_busy(void)
+int32_t plat_audio_ok(void)
 {
     return 0;
 }
 
-void plat_audio_stop(void)
+uint32_t plat_audio_free(void)
+{
+    return 0;
+}
+
+uint32_t plat_audio_pending(void)
+{
+    return 0;
+}
+
+uint32_t plat_audio_write(const int16_t* samples, uint32_t count)
+{
+    (void)samples;
+    (void)count;
+    return 0;
+}
+
+void plat_audio_clear(void)
 {
 }
 

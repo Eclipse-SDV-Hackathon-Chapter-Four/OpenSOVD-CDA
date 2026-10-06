@@ -73,12 +73,17 @@ uint8_t plat_running_slot(void);
 /* Kicks the watchdog (started by the bootloader before an app). */
 void plat_watchdog_kick(void);
 
-/* Audio (app only; the bootloader has stubs). Say queues word clips (ids from
- * speech_words.h) on the headphone output: 1 = started, 0 = no audio. */
-int32_t plat_audio_say(const uint8_t* words, uint32_t len);
-/* 1 while playing */
-int32_t plat_audio_busy(void);
-void plat_audio_stop(void);
+/* Audio (app only; the bootloader has stubs): 16-bit mono samples at 8 kHz
+ * for the headphone output, through a ring buffer of 0.5 s. One producer
+ * (the speech thread). ok = 1 if the codec works. */
+int32_t plat_audio_ok(void);
+/* Free space and queued (not yet played) samples. */
+uint32_t plat_audio_free(void);
+uint32_t plat_audio_pending(void);
+/* Queues up to count samples, returns how many fitted. */
+uint32_t plat_audio_write(const int16_t* samples, uint32_t count);
+/* Drops all queued samples. */
+void plat_audio_clear(void);
 /* Volume 0..100 % (DAC digital gain, -50 dB..0 dB; 0 = mute). */
 void plat_audio_set_volume(uint32_t percent);
 
@@ -119,5 +124,6 @@ void az3166_uds_tick(void);
 void az3166_udp_task(void);
 void az3166_tcp_task(uint32_t slot);
 void az3166_routine_task(void);
+void az3166_speech_task(void);
 
 #endif

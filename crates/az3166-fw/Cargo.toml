@@ -16,4 +16,5 @@ doctest = false
 [dependencies]
 az3166-doip = { workspace = true }
 az3166-ecu = { workspace = true }
+az3166-speech = { workspace = true }
 heapless = { workspace = true }
