@@ -6,9 +6,9 @@
 
 [workspace]
 resolver = "2"
-members = ["crates/az3166-doip", "crates/az3166-ecu", "crates/az3166-fw"]
+members = ["crates/az3166-doip", "crates/az3166-ecu", "crates/az3166-fw", "crates/az3166-speech"]
 # Host-testable crates; the firmware crate only builds for thumbv7em-none-eabihf.
-default-members = ["crates/az3166-doip", "crates/az3166-ecu"]
+default-members = ["crates/az3166-doip", "crates/az3166-ecu", "crates/az3166-speech"]
 
 [workspace.package]
 version = "0.2.0"
@@ -17,6 +17,7 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 heapless = "0.9"
+libm = "0.2"
 
 # ace — Automotive Communication Engine (UDS server), built without `std`
 ace-server = { git = "https://github.com/samp-reston/ace.git", rev = "0706bef625fbde1d8fadbd84ea21bb8ee650f7e4", default-features = false }
@@ -24,6 +25,7 @@ ace-sim = { git = "https://github.com/samp-reston/ace.git", rev = "0706bef625fbd
 
 az3166-doip = { path = "crates/az3166-doip" }
 az3166-ecu = { path = "crates/az3166-ecu" }
+az3166-speech = { path = "crates/az3166-speech" }
 
 # ace-server vendored with local patches (vendor/ace-server/PATCHES.md)
 [patch."https://github.com/samp-reston/ace.git"]

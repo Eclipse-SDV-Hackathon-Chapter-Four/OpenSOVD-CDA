@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
+
+[package]
+name = "az3166-speech"
+description = "English text-to-speech for the AZ3166 (rules + formant synthesizer, no_std)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+heapless = { workspace = true }
+libm = { workspace = true }
