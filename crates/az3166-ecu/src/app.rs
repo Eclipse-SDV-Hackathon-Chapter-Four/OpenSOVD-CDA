@@ -26,8 +26,8 @@ use ace_sim::io::NodeAddress;
 use crate::board::{Board, BootState, FlashError, Sensor, LED_COUNT};
 use crate::speech;
 use crate::{
-    common_did, Policy, Shared, ECU_ADDRESS, FUNCTIONAL_ADDRESS, RESET_HARD, ROUTINE_ABORTED,
-    ROUTINE_COMPLETED, ROUTINE_RUNNING, VIN, VOLUME_MAX, VOLUME_STEP,
+    common_did, Policy, Shared, ECU_ADDRESS, FUNCTIONAL_ADDRESS, OUTBOX, RESET_HARD,
+    ROUTINE_ABORTED, ROUTINE_COMPLETED, ROUTINE_RUNNING, VIN, VOLUME_MAX, VOLUME_STEP,
 };
 
 /// App variant identification: DID 0xF100 = 0x000101
@@ -440,7 +440,7 @@ pub fn app_server_config() -> ServerConfig {
 // ---------------------------------------------------------------------------
 
 pub struct AppEcu<B: Board> {
-    pub(crate) server: UdsServer<AppHandler<B>, AppSecurity>,
+    pub(crate) server: UdsServer<AppHandler<B>, AppSecurity, OUTBOX>,
     dtcs: heapless::Vec<Dtc, MAX_DTCS>,
 }
 

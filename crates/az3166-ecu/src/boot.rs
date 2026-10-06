@@ -26,7 +26,9 @@ use ace_sim::io::NodeAddress;
 
 use crate::board::{Board, FlashError};
 use crate::update::{self, Block, Download, UpdateError};
-use crate::{common_did, Policy, Shared, ECU_ADDRESS, FUNCTIONAL_ADDRESS, RESET_HARD, RESET_SOFT};
+use crate::{
+    common_did, Policy, Shared, ECU_ADDRESS, FUNCTIONAL_ADDRESS, OUTBOX, RESET_HARD, RESET_SOFT,
+};
 
 /// Boot variant identification: DID 0xF100 = 0xFF0000
 pub const VARIANT_ID: [u8; 3] = [0xFF, 0x00, 0x00];
@@ -229,7 +231,7 @@ pub fn boot_server_config() -> ServerConfig {
 }
 
 pub struct BootEcu<B: Board> {
-    pub(crate) server: UdsServer<BootHandler<B>, BootSecurity<B>>,
+    pub(crate) server: UdsServer<BootHandler<B>, BootSecurity<B>, OUTBOX>,
 }
 
 impl<B: Board + Clone> BootEcu<B> {

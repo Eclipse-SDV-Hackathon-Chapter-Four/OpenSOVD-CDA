@@ -27,7 +27,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 
 use ace_server::handler::ServerHandler;
 use ace_server::security_provider::SecurityProvider;
-use ace_server::server::{ServerError, UdsServer, MAX_FRAME, MAX_OUTBOX};
+use ace_server::server::{ServerError, UdsServer};
 use ace_sim::clock::Instant as AceInstant;
 use ace_sim::io::NodeAddress;
 
@@ -179,7 +179,10 @@ pub(crate) fn common_did<B: Board>(
     }
 }
 
-type Outbox = heapless::Vec<(NodeAddress, heapless::Vec<u8, MAX_FRAME>), MAX_OUTBOX>;
+/// ace-server outbox capacity. Each request queues one response and periodic
+/// DIDs (0x2A) are not supported, so nothing else accumulates between drains;
+/// one spare entry. Each entry is a 4 KiB frame.
+pub(crate) const OUTBOX: usize = 2;
 
 const NRC_SERVICE_NOT_SUPPORTED: u8 = 0x11;
 const NRC_SUB_FUNCTION_NOT_SUPPORTED: u8 = 0x12;
@@ -249,12 +252,11 @@ pub enum Variant<B: Board> {
     Boot(BootEcu<B>),
 }
 
-/// The ECU: one variant plus the scratch space to collect server responses.
-/// Large (~130 KiB) — the firmware keeps it in a static.
+/// The ECU: one variant. Large (~10 KiB, mostly the server outbox) — the
+/// firmware keeps it in a static.
 pub struct Ecu<B: Board> {
     variant: Variant<B>,
     shared: &'static Shared,
-    outbox: Outbox,
 }
 
 impl<B: Board + Clone> Ecu<B> {
@@ -263,11 +265,7 @@ impl<B: Board + Clone> Ecu<B> {
             BootState::AppValid => Variant::App(AppEcu::new(board, shared)),
             BootState::BootRequested => Variant::Boot(BootEcu::new(board, shared)),
         };
-        Self {
-            variant,
-            shared,
-            outbox: heapless::Vec::new(),
-        }
+        Self { variant, shared }
     }
 }
 
@@ -302,15 +300,7 @@ impl<B: Board> Ecu<B> {
                 if let Some(n) = app.handle_local(request, response) {
                     return n;
                 }
-                serve(
-                    &mut app.server,
-                    self.shared,
-                    &mut self.outbox,
-                    source,
-                    request,
-                    response,
-                    now,
-                )
+                serve(&mut app.server, self.shared, source, request, response, now)
             }
             Variant::Boot(boot) => {
                 let server = &boot.server;
@@ -322,7 +312,6 @@ impl<B: Board> Ecu<B> {
                 serve(
                     &mut boot.server,
                     self.shared,
-                    &mut self.outbox,
                     source,
                     request,
                     response,
@@ -336,16 +325,15 @@ impl<B: Board> Ecu<B> {
     pub fn tick(&mut self, now_us: u64) {
         let now = AceInstant::from_micros(now_us);
         match &mut self.variant {
-            Variant::App(app) => tick(&mut app.server, self.shared, &mut self.outbox, now),
-            Variant::Boot(boot) => tick(&mut boot.server, self.shared, &mut self.outbox, now),
+            Variant::App(app) => tick(&mut app.server, self.shared, now),
+            Variant::Boot(boot) => tick(&mut boot.server, self.shared, now),
         }
     }
 }
 
 fn serve<H: ServerHandler, S: SecurityProvider>(
-    server: &mut UdsServer<H, S>,
+    server: &mut UdsServer<H, S, OUTBOX>,
     shared: &Shared,
-    outbox: &mut Outbox,
     source: u16,
     request: &[u8],
     response: &mut [u8],
@@ -361,31 +349,27 @@ fn serve<H: ServerHandler, S: SecurityProvider>(
         .session_type
         .store(server.session_type(), Ordering::Relaxed);
 
-    outbox.clear();
-    server.drain_outbox(outbox);
+    // The first frame for the tester is its response.
+    let mut len = None;
+    server.drain_outbox_with(|dst, data| {
+        if len.is_none() && dst == &src {
+            let n = data.len().min(response.len());
+            response[..n].copy_from_slice(&data[..n]);
+            len = Some(n);
+        }
+    });
 
     // ace-server returns handler errors instead of queueing the NRC.
     match result {
-        Err(ServerError::Handler(e)) => return negative_response(response, request[0], e.into()),
-        Err(ServerError::Codec(_)) => {
-            return negative_response(response, request[0], NRC_INCORRECT_LENGTH)
-        }
-        _ => {}
-    }
-    match outbox.iter().find(|(dst, _)| dst == &src) {
-        Some((_, data)) => {
-            let n = data.len().min(response.len());
-            response[..n].copy_from_slice(&data[..n]);
-            n
-        }
-        None => 0,
+        Err(ServerError::Handler(e)) => negative_response(response, request[0], e.into()),
+        Err(ServerError::Codec(_)) => negative_response(response, request[0], NRC_INCORRECT_LENGTH),
+        _ => len.unwrap_or(0),
     }
 }
 
 fn tick<H: ServerHandler, S: SecurityProvider>(
-    server: &mut UdsServer<H, S>,
+    server: &mut UdsServer<H, S, OUTBOX>,
     shared: &Shared,
-    outbox: &mut Outbox,
     now: AceInstant,
 ) {
     let _ = server.tick(now);
@@ -393,9 +377,7 @@ fn tick<H: ServerHandler, S: SecurityProvider>(
         .session_type
         .store(server.session_type(), Ordering::Relaxed);
     // Periodic DIDs are not configured; discard anything queued.
-    outbox.clear();
-    server.drain_outbox(outbox);
-    outbox.clear();
+    server.drain_outbox_with(|_, _| {});
 }
 
 #[cfg(test)]
