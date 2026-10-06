@@ -36,8 +36,6 @@ from helper import (
 
 # (code, short name, text)
 DTCS = [
-    (0x01E240, "FluxCapacitorOverload", "Flux capacitor overload (simulated)"),
-    (0x039447, "TemporalDisplacementCircuit", "Temporal displacement circuit (simulated)"),
     (
         0xC10100,
         "HumidityTemperatureSensorNoResponse",

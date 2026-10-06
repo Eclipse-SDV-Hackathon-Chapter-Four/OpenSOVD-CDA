@@ -110,20 +110,6 @@ def add_app_dids(base: DiagLayerRaw, app: DiagLayerRaw):
         write_sessions=WRITE_SESSIONS,
     )
 
-    # F200 FluxCapacitorPowerConsumption, sint32, factor 1, MW
-    power_dop = add_dop(int_dop(app, "MegaWatts_SInt32", True, 32, unit("MegaWatt")))
-    add_service_did(
-        base,
-        app,
-        "FluxCapacitorPowerConsumption",
-        "PowerConsumption",
-        0xF200,
-        power_dop,
-        funct_class="CurrentData",
-        semantic="CURRENTDATA",
-        long_name="Flux Capacitor Power Consumption",
-    )
-
     # F201 AmbientTemperature, sint16 * 0.1, degC
     temp_dop = add_dop(
         linear_dop(app, "Temperature_SInt16_0p1", True, 16, 0.1, unit("DegreeCelsius"))

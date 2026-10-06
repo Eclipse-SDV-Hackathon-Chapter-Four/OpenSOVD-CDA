@@ -83,6 +83,9 @@ def main(pdx: str):
         ("CP_DoIPLogicalTesterAddress", "3584"),
         ("CP_P2Max", "50000"),
         ("CP_P2Star", "5000000"),
+        ("CP_P6Max", "2000000"),
+        ("CP_P6Star", "8000000"),
+        ("CP_RC78CompletionTimeout", "30000000"),
     ]:
         for proto in ("UDS_Ethernet_DoIP", "UDS_Ethernet_DoIP_DOBT"):
             check(f"{name} [{proto}] = {expected}", cps.get((name, proto)) == expected)
@@ -118,8 +121,7 @@ def main(pdx: str):
         [round(rate[k], 3) for k in "XYZ"] == [1.0, -1.0, 25.6],
         str(rate),
     )
-    m = decode(app, "62 F2 00 00 00 04 BA")
-    check("F200 1210 MW", m.param_dict["PowerConsumption"] == 1210)
+    check("no F200", "FluxCapacitorPowerConsumption_Read" not in app.services)
     m = decode(app, "62 F2 10 02")
     check(
         "F210 B pressed",
@@ -140,12 +142,12 @@ def main(pdx: str):
     m = decode(app, "71 03 10 01 02")
     check("SelfTest_RequestResults -> Completed", m.param_dict.get("RoutineStatus") == "Completed")
 
-    m = decode(app, "59 02 FF 01 E2 40 2F 03 94 47 24")
+    m = decode(app, "59 02 FF C1 02 00 09 C1 04 00 09")
     recs = m.param_dict["DTCAndStatusRecord"]
     check("19 02 two DTC records", len(recs) == 2, str(len(recs)))
     check(
-        "19 02 first DTC FluxCapacitorOverload",
-        recs[0]["DTCRecord"].short_name == "FluxCapacitorOverload",
+        "19 02 first DTC PressureSensorNoResponse",
+        recs[0]["DTCRecord"].short_name == "PressureSensorNoResponse",
     )
 
     raw = boot.services["RequestDownload"].encode_request(

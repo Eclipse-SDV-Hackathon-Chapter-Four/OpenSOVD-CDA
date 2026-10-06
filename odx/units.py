@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
 #
-# Physical dimensions and units used by the FLXC1000 data identifiers.
+# Physical dimensions and units used by the AZ3166 data identifiers.
 # Unit definitions follow the Eclipse OpenSOVD Classic Diagnostic Adapter test
 # container (testcontainer/odx/shared_units.py, Apache-2.0); only the units
 # needed by docs/diagnostics.md are defined here.
@@ -24,7 +24,6 @@ def add_units(dlr: DiagLayerRaw):
 
     pdim_raw = pdim("Raw")
     pdim_time = pdim("Time", time_exp=1)
-    pdim_power = pdim("Power", length_exp=2, mass_exp=1, time_exp=-3)
     pdim_temperature = pdim("ThermodynamicTemperature", temperature_exp=1)
     pdim_pressure = pdim("Pressure", length_exp=-1, mass_exp=1, time_exp=-2)
     pdim_acceleration = pdim("Acceleration", length_exp=1, time_exp=-2)
@@ -46,7 +45,6 @@ def add_units(dlr: DiagLayerRaw):
 
     units = [
         unit("Second", "s", 1, 0, pdim_time),
-        unit("MegaWatt", "MW", 1_000_000, 0, pdim_power),
         unit("DegreeCelsius", "°C", 1, 273.15, pdim_temperature),
         unit("PerCentRelativeHumidity", "%RH", 0.01, 0, pdim_raw),
         unit("HectoPascal", "hPa", 100, 0, pdim_pressure),
@@ -60,7 +58,6 @@ def add_units(dlr: DiagLayerRaw):
             [
                 pdim_raw,
                 pdim_time,
-                pdim_power,
                 pdim_temperature,
                 pdim_pressure,
                 pdim_acceleration,
