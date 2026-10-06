@@ -1,14 +1,57 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
  * This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
+ *
+ * Persistent boot/update state (see boot_state.c) and app slot helpers.
  */
 
-#ifndef FLXC1000_BOOT_STATE_H
-#define FLXC1000_BOOT_STATE_H
+#ifndef AZ3166_BOOT_STATE_H
+#define AZ3166_BOOT_STATE_H
 
 #include <stdint.h>
 
-/* Last stored PLAT_BOOT_STATE_*, or 0 if none was ever written. */
-uint32_t boot_state_read(void);
+#include "image_info.h"
+
+#define SLOT_A    0u
+#define SLOT_B    1u
+#define SLOT_NONE 0xFFu
+
+/* Record types */
+#define REC_RUN_APP   1u /* start the app (default) */
+#define REC_RUN_BOOT  2u /* stay in the Boot variant (App ECUReset) */
+#define REC_INSTALLED 3u /* new image written to slot: on trial */
+#define REC_ATTEMPT   4u /* bootloader started the trial slot */
+#define REC_CONFIRMED 5u /* app in slot came up: slot is good */
+#define REC_REJECTED  6u /* trial failed: rolled back */
+
+/* Slot status */
+#define SLOT_EMPTY     0u
+#define SLOT_TRIAL     1u
+#define SLOT_CONFIRMED 2u
+#define SLOT_REJECTED  3u
+
+typedef struct
+{
+    uint8_t run_boot;    /* stay in the Boot variant */
+    uint8_t active;      /* last confirmed slot, or SLOT_NONE */
+    uint8_t trial;       /* slot on trial, or SLOT_NONE */
+    uint8_t status[2];
+    uint8_t attempts[2]; /* starts of the trial slot so far */
+} boot_state_t;
+
+void boot_state_get(boot_state_t* state);
+/* 0 = ok */
+int boot_state_append(uint32_t type, uint8_t slot);
+/* Slot an update is written to: the one not active. */
+uint8_t boot_state_update_target(void);
+
+uint32_t slot_base(uint8_t slot);
+uint32_t slot_length(void);
+uint8_t slot_of_address(uint32_t address);
+/* Image header if the slot holds a plausible image linked for it, else NULL. */
+const image_info_t* slot_image(uint8_t slot);
+
+/* 0 = ok */
+int flash_erase_sectors(uint32_t first_sector, uint32_t count);
 
 #endif
