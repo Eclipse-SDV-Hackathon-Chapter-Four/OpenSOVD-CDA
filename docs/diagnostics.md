@@ -138,14 +138,23 @@ initialise.
 | `1003` | VolumeUp | 01, 03 | volume +10 % (max 100); `71 01 10 03 <volume %>` | – | – |
 | `1004` | VolumeDown | 01, 03 | volume −10 % (0 = mute); `71 01 10 04 <volume %>` | – | – |
 | `1002` | AnnounceTemperature | 01, 03 | speaks the ambient temperature on the headphone jack; `71 01 10 02 01` | stops; `71 02 10 02 03` (after the end: `71 02 10 02 <status>`) | `71 03 10 02 <status>` |
+| `1005` | SpeakText | 01, 03 | `31 01 10 05 <text>`: speaks 1–200 bytes of printable ASCII on the headphone jack; `71 01 10 05 01` | stops; `71 02 10 05 03` (after the end: `71 02 10 05 <status>`) | `71 03 10 05 <status>` |
 
 VolumeUp and VolumeDown have Start only (the CDA runs them synchronously). The
 volume is 100 % after every reset.
 
 AnnounceTemperature reads the HTS221 temperature, rounded to 0.1 °C, and
-speaks it, e.g. "twenty three point five degrees celsius" or "minus four point
-zero degrees celsius" (about 2–3 s). Without a working temperature sensor or
-audio codec: NRC `22`.
+speaks "The temperature is 23.5 degrees Celsius." (about 3 s). Without a
+working temperature sensor or audio codec: NRC `22`.
+
+SpeakText speaks its option record (on-device text-to-speech, English). An
+empty text is NRC `13`, more than 200 bytes or a byte outside `20`–`7E` NRC
+`31`, no audio codec NRC `22`.
+
+Both speech routines are `Running` until the speech has been played
+(`Completed`). Start while the same routine runs: NRC `24`. Starting one
+while the other speaks replaces that speech, and the other one reports
+`Aborted`.
 
 Routine status byte: `00` idle, `01` running, `02` completed, `03` aborted.
 Start while running → NRC `24`. Stop while not running → NRC `24`.
