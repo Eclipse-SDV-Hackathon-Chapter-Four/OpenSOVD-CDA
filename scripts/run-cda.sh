@@ -2,12 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
 #
-# Run the Eclipse OpenSOVD Classic Diagnostic Adapter against the FLXC1000.
+# Run the Eclipse OpenSOVD Classic Diagnostic Adapter against the AZ3166 ECU.
 #
 #   scripts/run-cda.sh <ecu-ip> [extra CDA args...]
 #
-# Uses odx/AZ3166.mdd and the tester interface that routes to <ecu-ip>
-# (board or host_sim). SOVD API: http://localhost:20002 (swagger-ui).
+# Uses odx/AZ3166.mdd, the tester interface that routes to <ecu-ip> (board
+# or host_sim) and build/update as flash files directory ($FLASH_DIR).
+# SOVD API: http://localhost:20002 (swagger-ui).
 #
 # CDA checkout: $CDA_DIR (default ~/dev/classic-diagnostic-adapter). Uses
 # its target/release or target/debug binary, building a debug one if absent.
@@ -19,6 +20,10 @@ CDA_DIR="${CDA_DIR:-${HOME}/dev/classic-diagnostic-adapter}"
 
 ECU_IP="${1:?usage: run-cda.sh <ecu-ip> [extra CDA args...]}"
 shift
+
+# App update packages (scripts/az3166-flash) are served from here.
+FLASH_DIR="${FLASH_DIR:-${ROOT}/build/update}"
+mkdir -p "${FLASH_DIR}"
 
 if [[ -x "${CDA_DIR}/target/release/opensovd-cda" ]]; then
     CDA="${CDA_DIR}/target/release/opensovd-cda"
@@ -44,6 +49,7 @@ fi
 
 exec "${CDA}" \
     --databases-dir "${ROOT}/odx" \
+    --flash-files-path "${FLASH_DIR}" \
     --tester-address "${TESTER_IP}" \
     --tester-subnet "${TESTER_MASK}" \
     --protocol-name UDS_Ethernet_DoIP \
