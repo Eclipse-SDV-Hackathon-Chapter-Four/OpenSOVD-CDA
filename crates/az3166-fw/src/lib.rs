@@ -35,7 +35,7 @@ pub use net::{az3166_tcp_task, az3166_udp_task};
 
 static SHARED: Shared = Shared::new();
 
-/// The ECU (~136 KiB). Written once by `az3166_init` and afterwards only
+/// The ECU (~11 KiB). Written once by `az3166_init` and afterwards only
 /// used on the UDS worker thread.
 struct EcuCell(UnsafeCell<MaybeUninit<Ecu<Az3166>>>);
 
