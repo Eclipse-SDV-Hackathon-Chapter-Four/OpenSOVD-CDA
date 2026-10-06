@@ -352,7 +352,7 @@ impl<B: Board> AppEcu<B> {
         }
 
         let mut display_text = [b' '; 16];
-        display_text[..15].copy_from_slice(b"FLXC1000-AZ3166");
+        display_text[..6].copy_from_slice(b"AZ3166");
 
         let handler = AppHandler {
             board,
