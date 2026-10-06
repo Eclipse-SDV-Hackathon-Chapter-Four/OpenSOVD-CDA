@@ -59,6 +59,13 @@ typedef struct
 
 static tcp_slot_t tcp_slots[PLAT_TCP_SLOTS];
 
+/* A NetX listen entry holds one socket at a time. The slot holding this
+ * mutex owns the listener: it (re)listens with its socket, waits for a
+ * tester, and hands the listener over once the connection is accepted
+ * (NetX frees the listen entry when the SYN arrives). */
+static TX_MUTEX listen_mutex;
+static int listening;
+
 static ULONG ms_to_ticks(uint32_t ms)
 {
     return (ms * TX_TIMER_TICKS_PER_SECOND + 999u) / 1000u;
@@ -164,20 +171,7 @@ static UINT sockets_init(void)
         }
     }
 
-    /* The first socket opens the listener, the others queue on the same port. */
-    if ((status = nx_tcp_server_socket_listen(&nx_ip, DOIP_PORT, &tcp_slots[0].socket, TCP_LISTEN_QUEUE, NX_NULL)))
-    {
-        return status;
-    }
-    for (uint32_t i = 1; i < PLAT_TCP_SLOTS; i++)
-    {
-        status = nx_tcp_server_socket_relisten(&nx_ip, DOIP_PORT, &tcp_slots[i].socket);
-        if (status != NX_SUCCESS && status != NX_CONNECTION_PENDING)
-        {
-            return status;
-        }
-    }
-    return NX_SUCCESS;
+    return tx_mutex_create(&listen_mutex, "doip-listen", TX_INHERIT);
 }
 
 UINT net_init(const char* ssid, const char* password)
@@ -311,7 +305,39 @@ int32_t plat_tcp_accept(uint32_t slot)
     {
         return PLAT_ERROR;
     }
-    return nx_tcp_server_socket_accept(&tcp_slots[slot].socket, NX_WAIT_FOREVER) == NX_SUCCESS ? 0 : PLAT_ERROR;
+    NX_TCP_SOCKET* socket = &tcp_slots[slot].socket;
+
+    tx_mutex_get(&listen_mutex, TX_WAIT_FOREVER);
+    UINT status;
+    if (!listening)
+    {
+        status = nx_tcp_server_socket_listen(&nx_ip, DOIP_PORT, socket, TCP_LISTEN_QUEUE, NX_NULL);
+        listening = status == NX_SUCCESS;
+    }
+    else
+    {
+        status = nx_tcp_server_socket_relisten(&nx_ip, DOIP_PORT, socket);
+        if (status == NX_CONNECTION_PENDING)
+        {
+            status = NX_SUCCESS;
+        }
+    }
+    if (status == NX_SUCCESS)
+    {
+        status = nx_tcp_server_socket_accept(socket, NX_WAIT_FOREVER);
+        if (status != NX_SUCCESS)
+        {
+            nx_tcp_server_socket_unaccept(socket);
+        }
+    }
+    tx_mutex_put(&listen_mutex);
+
+    if (status != NX_SUCCESS)
+    {
+        printf("DoIP accept failed on slot %lu (0x%02x)\r\n", (unsigned long)slot, status);
+        return PLAT_ERROR;
+    }
+    return 0;
 }
 
 int32_t plat_tcp_recv(uint32_t slot, uint8_t* buf, uint32_t cap, uint32_t timeout_ms)
@@ -378,5 +404,4 @@ void plat_tcp_close(uint32_t slot)
     }
     nx_tcp_socket_disconnect(&s->socket, TX_TIMER_TICKS_PER_SECOND);
     nx_tcp_server_socket_unaccept(&s->socket);
-    nx_tcp_server_socket_relisten(&nx_ip, DOIP_PORT, &s->socket);
 }
