@@ -3,16 +3,16 @@
  * This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
  */
 
-//! FLXC1000 firmware for the MXCHIP AZ3166.
+//! AZ3166 ECU firmware for the MXCHIP AZ3166.
 //!
 //! Built as a static library and linked into the C platform (`platform/`),
 //! which owns the hardware, ThreadX, NetX Duo and the Wi-Fi driver. The
-//! platform creates the threads and calls the `flxc1000_*` entry points:
+//! platform creates the threads and calls the `az3166_*` entry points:
 //!
-//! - UDS worker: [`flxc1000_init`], then [`flxc1000_uds_execute`] per request
-//!   and [`flxc1000_uds_tick`] every 100 ms. Only this thread touches the ECU.
-//! - [`flxc1000_tcp_task`] per DoIP TCP slot, [`flxc1000_udp_task`] for
-//!   vehicle identification, [`flxc1000_routine_task`] for the LED self-test.
+//! - UDS worker: [`az3166_init`], then [`az3166_uds_execute`] per request
+//!   and [`az3166_uds_tick`] every 100 ms. Only this thread touches the ECU.
+//! - [`az3166_tcp_task`] per DoIP TCP slot, [`az3166_udp_task`] for
+//!   vehicle identification, [`az3166_routine_task`] for the LED self-test.
 
 #![no_std]
 
@@ -20,21 +20,22 @@ mod board;
 #[macro_use]
 mod log;
 mod net;
+mod screens;
 mod sys;
 
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
-use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 
-use flxc1000_ecu::{app, BootState, Ecu, Shared, VIN};
+use az3166_ecu::{app, BootState, Ecu, Shared, VIN};
 
 use board::Az3166;
 
-pub use net::{flxc1000_tcp_task, flxc1000_udp_task};
+pub use net::{az3166_tcp_task, az3166_udp_task};
 
 static SHARED: Shared = Shared::new();
 
-/// The ECU (~136 KiB). Written once by `flxc1000_init` and afterwards only
+/// The ECU (~136 KiB). Written once by `az3166_init` and afterwards only
 /// used on the UDS worker thread.
 struct EcuCell(UnsafeCell<MaybeUninit<Ecu<Az3166>>>);
 
@@ -44,17 +45,16 @@ unsafe impl Sync for EcuCell {}
 static ECU: EcuCell = EcuCell(UnsafeCell::new(MaybeUninit::uninit()));
 static ECU_READY: AtomicBool = AtomicBool::new(false);
 static IS_APP: AtomicBool = AtomicBool::new(false);
-static DISPLAYED_SESSION: AtomicU8 = AtomicU8::new(0);
 
 /// # Safety
-/// Must only be called on the UDS worker thread after `flxc1000_init`.
+/// Must only be called on the UDS worker thread after `az3166_init`.
 unsafe fn ecu() -> &'static mut Ecu<Az3166> {
     (*ECU.0.get()).assume_init_mut()
 }
 
 /// Builds the ECU for the boot state chosen by the platform.
 #[no_mangle]
-pub extern "C" fn flxc1000_init(boot_state: u32) {
+pub extern "C" fn az3166_init(boot_state: u32) {
     let state = match boot_state {
         sys::BOOT_STATE_BOOT_REQUESTED => BootState::BootRequested,
         _ => BootState::AppValid,
@@ -64,17 +64,10 @@ pub extern "C" fn flxc1000_init(boot_state: u32) {
     IS_APP.store(ecu.is_app(), Ordering::Relaxed);
     ECU_READY.store(true, Ordering::Release);
 
-    let (title, text): (&[u8], &[u8]) = if ecu.is_app() {
-        (b"AZ3166 App", b"AZ3166")
-    } else {
-        (b"AZ3166 Boot", b"BOOTLOADER")
-    };
-    sys::display_line(0, title);
-    sys::display_line(3, text);
     log!(
-        "flxc1000 {} variant, address 0x{:04X}, VIN {}",
+        "az3166 {} variant, address 0x{:04X}, VIN {}",
         if ecu.is_app() { "App" } else { "Boot" },
-        flxc1000_ecu::ECU_ADDRESS,
+        az3166_ecu::ECU_ADDRESS,
         core::str::from_utf8(VIN).unwrap_or("?")
     );
 }
@@ -84,7 +77,7 @@ pub extern "C" fn flxc1000_init(boot_state: u32) {
 /// # Safety
 /// `req` must point to `len` readable bytes and `resp` to `cap` writable bytes.
 #[no_mangle]
-pub unsafe extern "C" fn flxc1000_uds_execute(
+pub unsafe extern "C" fn az3166_uds_execute(
     source: u16,
     req: *const u8,
     len: u32,
@@ -98,47 +91,40 @@ pub unsafe extern "C" fn flxc1000_uds_execute(
 
 /// Advances ECU timers. UDS worker thread only.
 #[no_mangle]
-pub extern "C" fn flxc1000_uds_tick() {
+pub extern "C" fn az3166_uds_tick() {
     if ECU_READY.load(Ordering::Acquire) {
         // SAFETY: called on the UDS worker thread.
         unsafe { ecu() }.tick(sys::uptime_us());
     }
 }
 
-/// Runs the SelfTest LED cascade when started and keeps the session shown on
-/// the display current.
+const ROUTINE_PERIOD_MS: u32 = 50;
+
+/// Lowest-priority task: kicks the watchdog, runs the SelfTest LED cascade
+/// when started and drives the display screens (buttons A/B).
 #[no_mangle]
-pub extern "C" fn flxc1000_routine_task() -> ! {
-    if IS_APP.load(Ordering::Relaxed) {
+pub extern "C" fn az3166_routine_task() -> ! {
+    let is_app = IS_APP.load(Ordering::Relaxed);
+    sys::watchdog_kick();
+    if is_app {
         app::boot_blink(&Az3166);
     }
+    let mut ui = screens::Ui::new(is_app);
     loop {
+        // Starves (and the watchdog resets) if a higher-priority thread hangs.
+        sys::watchdog_kick();
         if SHARED.routine_start.swap(false, Ordering::SeqCst) {
             log!("SelfTest LED cascade");
             app::run_self_test(&SHARED, &Az3166);
         }
-        update_session_display();
-        sys::sleep_ms(50);
+        ui.update(&SHARED, ROUTINE_PERIOD_MS);
+        sys::sleep_ms(ROUTINE_PERIOD_MS);
     }
-}
-
-fn update_session_display() {
-    let session = SHARED.session_type.load(Ordering::Relaxed);
-    if DISPLAYED_SESSION.swap(session, Ordering::Relaxed) == session {
-        return;
-    }
-    let text: &[u8] = match session {
-        0x01 => b"Session: Default",
-        0x02 => b"Session: Program",
-        0x03 => b"Session: Extended",
-        _ => b"Session: ?",
-    };
-    sys::display_line(2, text);
 }
 
 /// After a response went out: performs an ECUReset requested by it.
 pub(crate) fn handle_pending_reset() {
-    if SHARED.take_pending_reset() != flxc1000_ecu::RESET_NONE {
+    if SHARED.take_pending_reset() != az3166_ecu::RESET_NONE {
         log!("ECUReset");
         // Let the response leave the network stack first.
         sys::sleep_ms(50);
