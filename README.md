@@ -100,17 +100,17 @@ scripts/doip-smoke.py <board-ip> --to-boot  # plus App -> Boot -> App cycle
 
 ## Use with the Classic Diagnostic Adapter
 
-The ECU is `FLXC1000_AZ3166` at logical address `0x1001` (the Raspberry Pi
+The ECU is `AZ3166` at logical address `0x1001` (the Raspberry Pi
 FLXC1000 uses `0x1000`, so both can share a network). With the CDA checked out
 and built in `~/dev/classic-diagnostic-adapter` (or `CDA_DIR`):
 
 ```bash
-scripts/run-cda.sh <board-ip>     # loads odx/FLXC1000_AZ3166.mdd, tester = local interface to the board
+scripts/run-cda.sh <board-ip>     # loads odx/AZ3166.mdd, tester = local interface to the board
 
 B=http://localhost:20002/vehicle/v15
 TOKEN=$(curl -s -X POST $B/authorize -H 'Content-Type: application/json' \
   -d '{"client_id":"test","client_secret":"test"}' | jq -r .access_token)
-curl -s -H "Authorization: Bearer $TOKEN" $B/components/flxc1000_az3166/data/AmbientTemperature
+curl -s -H "Authorization: Bearer $TOKEN" $B/components/az3166/data/AmbientTemperature
 ```
 
 The CDA and the ECU each bind UDP 13400, so `host_sim` and the CDA cannot
@@ -128,7 +128,7 @@ scripts/doip-smoke.py 127.0.0.1 --to-boot
 ```
 
 `host_sim` uses the same ECU and DoIP code with simulated sensor values, so a
-tester or the CDA (with `odx/FLXC1000_AZ3166.mdd`) can be pointed at it.
+tester or the CDA (with `odx/AZ3166.mdd`) can be pointed at it.
 
 ## Differences from flxc1000-rpi
 
