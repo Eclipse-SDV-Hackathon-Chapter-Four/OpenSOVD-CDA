@@ -4,7 +4,7 @@ use crate::{
     handler::ServerHandler,
     security_provider::SecurityProvider,
     server::{ServerError, UdsServer},
-    MAX_FRAME, MAX_OUTBOX,
+    MAX_FRAME,
 };
 use ace_sim::node::SimNode;
 
@@ -12,7 +12,7 @@ use ace_sim::node::SimNode;
 
 // region: SimNode for UdsServer
 
-impl<H, S> SimNode<MAX_FRAME, MAX_OUTBOX> for UdsServer<H, S>
+impl<H, S, const Q: usize> SimNode<MAX_FRAME, Q> for UdsServer<H, S, Q>
 where
     H: ServerHandler,
     S: SecurityProvider,
@@ -53,7 +53,7 @@ where
         &mut self,
         out: &mut heapless::Vec<
             (ace_sim::io::NodeAddress, heapless::Vec<u8, MAX_FRAME>),
-            MAX_OUTBOX,
+            Q,
         >,
     ) -> usize {
         UdsServer::drain_outbox(self, out)

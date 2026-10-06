@@ -201,8 +201,10 @@ impl PeriodicState {
 ///
 /// All timing is driven by [`tick`] - no blocking, no hardware timers,
 /// no OS calls. Suitable for direct use as a `SimNode` in `ace-sim`.
+///
+/// `Q` is the outbox capacity: the most frames queued between two drains.
 #[derive(Debug)]
-pub struct UdsServer<H, S>
+pub struct UdsServer<H, S, const Q: usize = MAX_OUTBOX>
 where
     H: ServerHandler,
     S: SecurityProvider,
@@ -214,10 +216,10 @@ where
     session: SessionState,
     security: SecurityState,
     periodic: PeriodicState,
-    outbox: Vec<(NodeAddress, Vec<u8, MAX_FRAME>), MAX_OUTBOX>,
+    outbox: Vec<(NodeAddress, Vec<u8, MAX_FRAME>), Q>,
 }
 
-impl<H, S> UdsServer<H, S>
+impl<H, S, const Q: usize> UdsServer<H, S, Q>
 where
     H: ServerHandler,
     S: SecurityProvider,
@@ -358,12 +360,25 @@ where
     /// Drains pending outbound frames into `out`.
     pub fn drain_outbox(
         &mut self,
-        out: &mut Vec<(NodeAddress, Vec<u8, MAX_FRAME>), MAX_OUTBOX>,
+        out: &mut Vec<(NodeAddress, Vec<u8, MAX_FRAME>), Q>,
     ) -> usize {
         let n = self.outbox.len();
         for item in self.outbox.drain(..) {
             let _ = out.push(item);
         }
+        n
+    }
+
+    /// Drains pending outbound frames, passing each to `f` in queue order.
+    ///
+    /// Unlike [`drain_outbox`](Self::drain_outbox) this needs no second
+    /// outbox-sized buffer.
+    pub fn drain_outbox_with(&mut self, mut f: impl FnMut(&NodeAddress, &[u8])) -> usize {
+        let n = self.outbox.len();
+        for (dst, frame) in self.outbox.iter() {
+            f(dst, frame);
+        }
+        self.outbox.clear();
         n
     }
 
