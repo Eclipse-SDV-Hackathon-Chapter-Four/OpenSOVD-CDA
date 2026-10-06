@@ -23,6 +23,9 @@ struct BoardState {
     flash: Vec<(u32, Vec<u8>)>,
     erased: Option<u32>,
     committed: Option<u32>,
+    announced: Vec<u8>,
+    announcing: bool,
+    volume: Option<u8>,
 }
 
 const SLOT_A: u32 = 0x0806_0000;
@@ -131,6 +134,21 @@ impl Board for FakeBoard {
         s.committed = Some(base);
         s.boot_state = Some(BootState::AppValid);
         Ok(())
+    }
+    fn announce(&self, words: &[u8]) -> bool {
+        let mut s = self.state();
+        s.announced = words.to_vec();
+        s.announcing = true;
+        true
+    }
+    fn announcing(&self) -> bool {
+        self.state().announcing
+    }
+    fn announce_stop(&self) {
+        self.state().announcing = false;
+    }
+    fn set_volume(&self, percent: u8) {
+        self.state().volume = Some(percent);
     }
 }
 
@@ -282,6 +300,110 @@ fn self_test_routine() {
         [0x71, 0x03, 0x10, 0x01, ROUTINE_COMPLETED]
     );
     assert_eq!(h.req(&[0x31, 0x02, 0x10, 0x01]), [0x7F, 0x31, 0x24]);
+}
+
+#[test]
+fn self_test_needs_extended_session() {
+    let mut h = Harness::new(BootState::AppValid);
+    assert_eq!(h.req(&[0x31, 0x01, 0x10, 0x01]), [0x7F, 0x31, 0x22]);
+}
+
+#[test]
+fn announce_temperature() {
+    use crate::speech::*;
+    let mut h = Harness::new(BootState::AppValid);
+    // Default session is enough; -12.34 C -> "minus twelve point three ..."
+    assert_eq!(
+        h.req(&[0x31, 0x03, 0x10, 0x02]),
+        [0x71, 0x03, 0x10, 0x02, ROUTINE_IDLE]
+    );
+    assert_eq!(
+        h.req(&[0x31, 0x01, 0x10, 0x02]),
+        [0x71, 0x01, 0x10, 0x02, ROUTINE_RUNNING]
+    );
+    assert_eq!(
+        h.board.state().announced,
+        [MINUS, 12, POINT, 3, DEGREES, CELSIUS]
+    );
+    assert_eq!(h.req(&[0x31, 0x01, 0x10, 0x02]), [0x7F, 0x31, 0x24]);
+    assert_eq!(
+        h.req(&[0x31, 0x03, 0x10, 0x02]),
+        [0x71, 0x03, 0x10, 0x02, ROUTINE_RUNNING]
+    );
+    h.board.state().announcing = false; // playback finished
+    assert_eq!(
+        h.req(&[0x31, 0x03, 0x10, 0x02]),
+        [0x71, 0x03, 0x10, 0x02, ROUTINE_COMPLETED]
+    );
+    // Stop after the end: acknowledged with the status, then start again
+    assert_eq!(
+        h.req(&[0x31, 0x02, 0x10, 0x02]),
+        [0x71, 0x02, 0x10, 0x02, ROUTINE_COMPLETED]
+    );
+    assert_eq!(
+        h.req(&[0x31, 0x01, 0x10, 0x02]),
+        [0x71, 0x01, 0x10, 0x02, ROUTINE_RUNNING]
+    );
+}
+
+#[test]
+fn announce_temperature_stop() {
+    let mut h = Harness::new(BootState::AppValid);
+    h.req(&[0x31, 0x01, 0x10, 0x02]);
+    assert_eq!(
+        h.req(&[0x31, 0x02, 0x10, 0x02]),
+        [0x71, 0x02, 0x10, 0x02, ROUTINE_ABORTED]
+    );
+    assert!(!h.board.state().announcing);
+    assert_eq!(
+        h.req(&[0x31, 0x03, 0x10, 0x02]),
+        [0x71, 0x03, 0x10, 0x02, ROUTINE_ABORTED]
+    );
+}
+
+#[test]
+fn announce_needs_working_sensor() {
+    let board = FakeBoard::default();
+    board.state().broken.push(Sensor::HumidityTemperature);
+    let mut h = Harness::with_board(BootState::AppValid, board);
+    assert_eq!(h.req(&[0x31, 0x01, 0x10, 0x02]), [0x7F, 0x31, 0x22]);
+}
+
+#[test]
+fn volume_up_and_down() {
+    let mut h = Harness::new(BootState::AppValid);
+    // Starts at 100 %, default session is enough
+    assert_eq!(h.req(&[0x22, 0xF2, 0x13]), [0x62, 0xF2, 0x13, 100]);
+    assert_eq!(
+        h.req(&[0x31, 0x01, 0x10, 0x03]),
+        [0x71, 0x01, 0x10, 0x03, 100]
+    );
+    assert_eq!(
+        h.req(&[0x31, 0x01, 0x10, 0x04]),
+        [0x71, 0x01, 0x10, 0x04, 90]
+    );
+    assert_eq!(h.board.state().volume, Some(90));
+    for _ in 0..12 {
+        h.req(&[0x31, 0x01, 0x10, 0x04]);
+    }
+    assert_eq!(h.req(&[0x22, 0xF2, 0x13]), [0x62, 0xF2, 0x13, 0]);
+    assert_eq!(h.board.state().volume, Some(0));
+    assert_eq!(
+        h.req(&[0x31, 0x01, 0x10, 0x03]),
+        [0x71, 0x01, 0x10, 0x03, 10]
+    );
+    // Start only: no Stop / RequestResults
+    assert_eq!(h.req(&[0x31, 0x02, 0x10, 0x03]), [0x7F, 0x31, 0x12]);
+}
+
+#[test]
+fn volume_write_needs_extended_and_range() {
+    let mut h = Harness::new(BootState::AppValid);
+    assert_eq!(h.req(&[0x2E, 0xF2, 0x13, 50])[..2], [0x7F, 0x2E]);
+    h.req(&[0x10, 0x03]);
+    assert_eq!(h.req(&[0x2E, 0xF2, 0x13, 50]), [0x6E, 0xF2, 0x13]);
+    assert_eq!(h.board.state().volume, Some(50));
+    assert_eq!(h.req(&[0x2E, 0xF2, 0x13, 101]), [0x7F, 0x2E, 0x31]);
 }
 
 #[test]
