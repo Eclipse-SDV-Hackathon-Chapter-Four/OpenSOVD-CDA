@@ -6,3 +6,5 @@
 /third_party/
 /.toolchain/
 __pycache__/
+.DS_Store
+.vscode/
