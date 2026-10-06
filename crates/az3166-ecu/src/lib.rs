@@ -12,7 +12,7 @@
  * This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
  */
 
-//! FLXC1000 ECU behaviour, independent of the transport and the hardware.
+//! AZ3166 ECU behaviour, independent of the transport and the hardware.
 //! The diagnostic surface is specified in `docs/diagnostics.md`.
 
 #![cfg_attr(not(test), no_std)]
@@ -20,8 +20,9 @@
 pub mod app;
 pub mod board;
 pub mod boot;
+pub mod update;
 
-use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 
 use ace_server::handler::ServerHandler;
 use ace_server::security_provider::SecurityProvider;
@@ -38,9 +39,6 @@ pub const ECU_ADDRESS: u16 = 0x1001;
 pub const FUNCTIONAL_ADDRESS: u16 = 0xFFFF;
 pub const VIN: &[u8; 17] = b"FLXC1000AZ3166001";
 
-/// DID 0xF195, space-padded crate version
-pub const SOFTWARE_VERSION: [u8; 8] = pad_version(env!("CARGO_PKG_VERSION").as_bytes());
-
 pub const RESET_NONE: u8 = 0;
 pub const RESET_HARD: u8 = 1;
 pub const RESET_SOFT: u8 = 3;
@@ -51,24 +49,62 @@ pub const ROUTINE_RUNNING: u8 = 0x01;
 pub const ROUTINE_COMPLETED: u8 = 0x02;
 pub const ROUTINE_ABORTED: u8 = 0x03;
 
-const fn pad_version(v: &[u8]) -> [u8; 8] {
-    let mut out = [b' '; 8];
-    let mut i = 0;
-    while i < v.len() && i < 8 {
-        out[i] = v[i];
-        i += 1;
-    }
-    out
+/// Byte array written by one thread (the UDS worker) and read by others
+/// (display). Sequence lock: the writer never waits, readers retry.
+pub struct SeqBytes<const N: usize> {
+    seq: AtomicU32,
+    bytes: [AtomicU8; N],
 }
 
-/// State shared between the UDS server (behind the ECU lock) and the
-/// firmware tasks (routine task, reset handling).
+impl<const N: usize> SeqBytes<N> {
+    pub const fn new() -> Self {
+        Self {
+            seq: AtomicU32::new(0),
+            bytes: [const { AtomicU8::new(0) }; N],
+        }
+    }
+
+    /// Single writer only.
+    pub fn set(&self, value: &[u8; N]) {
+        self.seq.fetch_add(1, Ordering::AcqRel);
+        for (cell, byte) in self.bytes.iter().zip(value) {
+            cell.store(*byte, Ordering::Relaxed);
+        }
+        self.seq.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub fn get(&self) -> [u8; N] {
+        loop {
+            let before = self.seq.load(Ordering::Acquire);
+            let mut value = [0u8; N];
+            for (byte, cell) in value.iter_mut().zip(&self.bytes) {
+                *byte = cell.load(Ordering::Relaxed);
+            }
+            if before.is_multiple_of(2) && self.seq.load(Ordering::Acquire) == before {
+                return value;
+            }
+        }
+    }
+}
+
+impl<const N: usize> Default for SeqBytes<N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// State shared between the UDS server (on the UDS worker thread) and the
+/// firmware tasks (routine task, display, reset handling).
 pub struct Shared {
     pub pending_reset: AtomicU8,
     pub session_type: AtomicU8,
     pub routine_status: AtomicU8,
     /// Set by RoutineControl Start, consumed by the routine task.
     pub routine_start: AtomicBool,
+    /// App data writable by WriteDataByIdentifier.
+    pub vin: SeqBytes<17>,
+    pub rgb: SeqBytes<3>,
+    pub display_text: SeqBytes<16>,
 }
 
 impl Shared {
@@ -78,6 +114,9 @@ impl Shared {
             session_type: AtomicU8::new(0x01),
             routine_status: AtomicU8::new(ROUTINE_IDLE),
             routine_start: AtomicBool::new(false),
+            vin: SeqBytes::new(),
+            rgb: SeqBytes::new(),
+            display_text: SeqBytes::new(),
         }
     }
 
@@ -115,7 +154,14 @@ pub(crate) fn common_did<B: Board>(
             Some(12)
         }
         0xF195 => {
-            buf[..8].copy_from_slice(&SOFTWARE_VERSION);
+            // Firmware version, space padded to 8 characters
+            let version = board.software_version();
+            for (i, out) in buf[..8].iter_mut().enumerate() {
+                *out = match version[i] {
+                    0 => b' ',
+                    c => c,
+                };
+            }
             Some(8)
         }
         _ => None,
@@ -169,6 +215,22 @@ impl Policy {
 fn negative_response(response: &mut [u8], sid: u8, nrc: u8) -> usize {
     response[..3].copy_from_slice(&[0x7F, sid, nrc]);
     3
+}
+
+/// Reads DID `did` the way ReadDataByIdentifier would, without going
+/// through the UDS server (no session timer side effects). For the display.
+pub fn read_did<B: Board>(
+    is_app: bool,
+    board: &B,
+    shared: &Shared,
+    did: u16,
+    buf: &mut [u8],
+) -> Option<usize> {
+    if is_app {
+        app::read_did(board, shared, did, buf).ok()
+    } else {
+        common_did(did, &boot::VARIANT_ID, shared, board, buf)
+    }
 }
 
 pub enum Variant<B: Board> {
