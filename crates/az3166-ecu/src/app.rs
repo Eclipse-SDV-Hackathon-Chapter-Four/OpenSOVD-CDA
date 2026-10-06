@@ -24,15 +24,20 @@ use ace_server::server::UdsServer;
 use ace_sim::io::NodeAddress;
 
 use crate::board::{Board, BootState, FlashError, Sensor, LED_COUNT};
+use crate::speech;
 use crate::{
     common_did, Policy, Shared, ECU_ADDRESS, FUNCTIONAL_ADDRESS, RESET_HARD, ROUTINE_ABORTED,
-    ROUTINE_COMPLETED, ROUTINE_RUNNING, VIN,
+    ROUTINE_COMPLETED, ROUTINE_RUNNING, VIN, VOLUME_MAX, VOLUME_STEP,
 };
 
 /// App variant identification: DID 0xF100 = 0x000101
 pub const VARIANT_ID: [u8; 3] = [0x00, 0x01, 0x01];
 
 const ROUTINE_SELF_TEST: u16 = 0x1001;
+const ROUTINE_ANNOUNCE_TEMPERATURE: u16 = 0x1002;
+const ROUTINE_VOLUME_UP: u16 = 0x1003;
+const ROUTINE_VOLUME_DOWN: u16 = 0x1004;
+const SESSION_EXTENDED: u8 = 0x03;
 
 /// PWM duty cycles for each LED of the bar — increasing brightness.
 const LED_DUTY: [u8; LED_COUNT] = [40, 55, 70, 85, 100];
@@ -122,6 +127,10 @@ pub fn read_did<B: Board>(
             buf[..16].copy_from_slice(&shared.display_text.get());
             Ok(16)
         }
+        0xF213 => {
+            buf[0] = shared.volume.load(Ordering::Relaxed);
+            Ok(1)
+        }
         0xF220 => {
             buf[..4].copy_from_slice(&board.ip_address());
             Ok(4)
@@ -188,6 +197,7 @@ impl<B: Board> ServerHandler for AppHandler<B> {
             0xF190 => 17,
             0xF211 => 3,
             0xF212 => 16,
+            0xF213 => 1,
             _ => return Err(BuiltinNrc::RequestOutOfRange),
         };
         if data.len() != expected_len {
@@ -198,6 +208,12 @@ impl<B: Board> ServerHandler for AppHandler<B> {
                 .shared
                 .vin
                 .set(data.try_into().expect("length checked")),
+            0xF213 => {
+                if data[0] > VOLUME_MAX {
+                    return Err(BuiltinNrc::RequestOutOfRange);
+                }
+                self.set_volume(data[0]);
+            }
             0xF211 => {
                 let rgb: [u8; 3] = data.try_into().expect("length checked");
                 self.shared.rgb.set(&rgb);
@@ -235,8 +251,19 @@ impl<B: Board> ServerHandler for AppHandler<B> {
         _data: &[u8],
         buf: &mut [u8],
     ) -> Result<usize, BuiltinNrc> {
-        if routine_id != ROUTINE_SELF_TEST {
-            return Err(BuiltinNrc::RequestOutOfRange);
+        match routine_id {
+            ROUTINE_SELF_TEST => {
+                // RoutineControl is allowed in Default for the announcement;
+                // the self test stays Extended only.
+                if self.shared.session_type.load(Ordering::Relaxed) != SESSION_EXTENDED {
+                    return Err(BuiltinNrc::ConditionsNotCorrect);
+                }
+            }
+            ROUTINE_ANNOUNCE_TEMPERATURE => return self.announce_temperature(sub_function, buf),
+            ROUTINE_VOLUME_UP | ROUTINE_VOLUME_DOWN => {
+                return self.change_volume(routine_id == ROUTINE_VOLUME_UP, sub_function, buf)
+            }
+            _ => return Err(BuiltinNrc::RequestOutOfRange),
         }
         let status = &self.shared.routine_status;
         match sub_function {
@@ -262,6 +289,87 @@ impl<B: Board> ServerHandler for AppHandler<B> {
             // RequestResults — current status
             0x03 => {
                 buf[0] = status.load(Ordering::SeqCst);
+                Ok(1)
+            }
+            _ => Err(BuiltinNrc::SubFunctionNotSupported),
+        }
+    }
+}
+
+impl<B: Board> AppHandler<B> {
+    /// RoutineControl 0x1003 / 0x1004 (Start only): volume up / down by one
+    /// step; the response carries the new volume in percent.
+    fn change_volume(
+        &mut self,
+        up: bool,
+        sub_function: u8,
+        buf: &mut [u8],
+    ) -> Result<usize, BuiltinNrc> {
+        if sub_function != 0x01 {
+            return Err(BuiltinNrc::SubFunctionNotSupported);
+        }
+        let current = self.shared.volume.load(Ordering::SeqCst);
+        let volume = if up {
+            current.saturating_add(VOLUME_STEP).min(VOLUME_MAX)
+        } else {
+            current.saturating_sub(VOLUME_STEP)
+        };
+        self.set_volume(volume);
+        buf[0] = volume;
+        Ok(1)
+    }
+
+    fn set_volume(&self, volume: u8) {
+        self.shared.volume.store(volume, Ordering::SeqCst);
+        self.board.set_volume(volume);
+    }
+
+    /// RoutineControl 0x1002: speak the ambient temperature.
+    fn announce_temperature(
+        &mut self,
+        sub_function: u8,
+        buf: &mut [u8],
+    ) -> Result<usize, BuiltinNrc> {
+        let status = &self.shared.announce_status;
+        let current = match status.load(Ordering::SeqCst) {
+            ROUTINE_RUNNING if !self.board.announcing() => {
+                status.store(ROUTINE_COMPLETED, Ordering::SeqCst);
+                ROUTINE_COMPLETED
+            }
+            s => s,
+        };
+        match sub_function {
+            0x01 => {
+                if current == ROUTINE_RUNNING {
+                    return Err(BuiltinNrc::RequestSequenceError);
+                }
+                let (temperature, _) = self
+                    .board
+                    .temperature_humidity()
+                    .ok_or(BuiltinNrc::ConditionsNotCorrect)?;
+                let tenths = i16::from_be_bytes(scaled_i16(temperature, 0.1)) as i32;
+                if !self.board.announce(&speech::temperature_words(tenths)) {
+                    return Err(BuiltinNrc::ConditionsNotCorrect);
+                }
+                status.store(ROUTINE_RUNNING, Ordering::SeqCst);
+                buf[0] = ROUTINE_RUNNING;
+                Ok(1)
+            }
+            0x02 => {
+                // A finished announcement is acknowledged with its status, so
+                // a tester (e.g. the CDA deleting its execution) can always
+                // stop it.
+                if current == ROUTINE_RUNNING {
+                    self.board.announce_stop();
+                    status.store(ROUTINE_ABORTED, Ordering::SeqCst);
+                    buf[0] = ROUTINE_ABORTED;
+                } else {
+                    buf[0] = current;
+                }
+                Ok(1)
+            }
+            0x03 => {
+                buf[0] = current;
                 Ok(1)
             }
             _ => Err(BuiltinNrc::SubFunctionNotSupported),
@@ -309,12 +417,13 @@ pub fn app_server_config() -> ServerConfig {
         .with_service(ServiceConfig::new(0x11, DEF_EXT)) // ECUReset
         .with_service(ServiceConfig::new(0x22, DEF_EXT)) // ReadDataByIdentifier
         .with_service(ServiceConfig::new(0x2E, EXT)) // WriteDataByIdentifier (extended only)
-        .with_service(ServiceConfig::new(0x31, EXT)) // RoutineControl (extended only)
+        .with_service(ServiceConfig::new(0x31, DEF_EXT)) // RoutineControl (SelfTest: extended only)
         .with_service(ServiceConfig::new(0x3E, DEF_EXT)) // TesterPresent
         // Writable DIDs (write in extended)
         .with_did(DidConfig::read_write(0xF190, DEF_EXT, EXT)) // VIN
         .with_did(DidConfig::read_write(0xF211, DEF_EXT, EXT)) // RGB LED
-        .with_did(DidConfig::read_write(0xF212, DEF_EXT, EXT)); // display text
+        .with_did(DidConfig::read_write(0xF212, DEF_EXT, EXT)) // display text
+        .with_did(DidConfig::read_write(0xF213, DEF_EXT, EXT)); // audio volume
 
     for did in [
         0xF100, 0xF186, 0xF18C, 0xF195, // identification
