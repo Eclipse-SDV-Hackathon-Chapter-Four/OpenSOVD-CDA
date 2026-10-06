@@ -73,6 +73,15 @@ uint8_t plat_running_slot(void);
 /* Kicks the watchdog (started by the bootloader before an app). */
 void plat_watchdog_kick(void);
 
+/* Audio (app only; the bootloader has stubs). Say queues word clips (ids from
+ * speech_words.h) on the headphone output: 1 = started, 0 = no audio. */
+int32_t plat_audio_say(const uint8_t* words, uint32_t len);
+/* 1 while playing */
+int32_t plat_audio_busy(void);
+void plat_audio_stop(void);
+/* Volume 0..100 % (DAC digital gain, -50 dB..0 dB; 0 = mute). */
+void plat_audio_set_volume(uint32_t percent);
+
 /* App update (bootloader only). Begin erases the inactive slot (CPU stalls
  * for seconds) and returns its base address, or 0 on failure. Program
  * writes into that slot only (0 = ok, verified by read back). Commit marks
