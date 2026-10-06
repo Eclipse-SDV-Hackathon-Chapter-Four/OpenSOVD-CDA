@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
 #
-# Build the AZ3166 firmware: build/flxc1000.elf and build/flxc1000.bin
+# Build the AZ3166 firmware: bootloader, app (slots A/B), the factory image
+# build/az3166-factory.bin and the update package build/update/az3166-app-<version>.bin
 #
 #   WIFI_SSID=MyNet WIFI_PASSWORD=secret scripts/build.sh
 #

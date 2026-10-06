@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
-"""DoIP/UDS smoke test against the FLXC1000 (board or host_sim).
+"""DoIP/UDS smoke test against the AZ3166 ECU (board or host_sim).
 
     scripts/doip-smoke.py <ecu-ip>            # App variant checks
     scripts/doip-smoke.py <ecu-ip> --to-boot  # also: App -> Boot -> App cycle
