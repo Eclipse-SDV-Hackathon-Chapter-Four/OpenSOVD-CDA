@@ -3,10 +3,10 @@
  * This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
  */
 
-//! Runs the FLXC1000 ECU and DoIP stack on the host (no board needed).
+//! Runs the AZ3166 ECU and DoIP stack on the host (no board needed).
 //! Sensors return fixed values; LEDs, RGB and the display are logged.
 //!
-//!   cargo run -p flxc1000-ecu --example host_sim [bind-ip]
+//!   cargo run -p az3166-ecu --example host_sim [bind-ip]
 //!
 //! Default bind address 127.0.0.1, port 13400. ECUReset switches variants
 //! like on the board.
@@ -16,18 +16,23 @@ use std::net::{TcpListener, TcpStream, UdpSocket};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use flxc1000_doip::{udp, Connection, DoipConfig, SendError, Transport, UdsHandler};
-use flxc1000_ecu::board::{Board, BootState, FlashError, Sensor};
-use flxc1000_ecu::{app, Ecu, Shared, ECU_ADDRESS, FUNCTIONAL_ADDRESS, RESET_NONE, VIN};
+use az3166_doip::{udp, Connection, DoipConfig, SendError, Transport, UdsHandler};
+use az3166_ecu::board::{Board, BootState, FlashError, Sensor};
+use az3166_ecu::{app, Ecu, Shared, ECU_ADDRESS, FUNCTIONAL_ADDRESS, RESET_NONE, VIN};
 
 const PORT: u16 = 13400;
 const MAC: [u8; 6] = [0x02, 0x00, 0xF1, 0xC0, 0x10, 0x00];
+
+const SLOT_B: u32 = 0x080A_0000;
+const SLOT_SIZE: usize = 0x4_0000;
 
 #[derive(Clone)]
 struct SimBoard {
     start: Instant,
     boot_state: Arc<Mutex<BootState>>,
     ip: [u8; 4],
+    /// Update target slot contents (always slot B in the simulator).
+    slot_b: Arc<Mutex<Vec<u8>>>,
 }
 
 impl Board for SimBoard {
@@ -85,6 +90,30 @@ impl Board for SimBoard {
     fn write_boot_state(&self, state: BootState) -> Result<(), FlashError> {
         println!("[board] boot state -> {:?}", state);
         *self.boot_state.lock().unwrap() = state;
+        Ok(())
+    }
+    fn software_version(&self) -> [u8; 16] {
+        let mut v = [0u8; 16];
+        v[..9].copy_from_slice(b"0.1.0-sim");
+        v
+    }
+    fn update_begin(&self) -> Option<u32> {
+        println!("[board] erase slot B");
+        *self.slot_b.lock().unwrap() = vec![0xFF; SLOT_SIZE];
+        Some(SLOT_B)
+    }
+    fn flash_program(&self, address: u32, data: &[u8]) -> Result<(), FlashError> {
+        let offset = address.checked_sub(SLOT_B).ok_or(FlashError)? as usize;
+        let mut slot = self.slot_b.lock().unwrap();
+        let cells = slot
+            .get_mut(offset..offset + data.len())
+            .ok_or(FlashError)?;
+        cells.copy_from_slice(data);
+        Ok(())
+    }
+    fn update_commit(&self, base: u32) -> Result<(), FlashError> {
+        println!("[board] slot {:08X} installed (trial), App next", base);
+        *self.boot_state.lock().unwrap() = BootState::AppValid;
         Ok(())
     }
 }
@@ -173,6 +202,7 @@ fn main() {
         start: Instant::now(),
         boot_state: Arc::new(Mutex::new(BootState::AppValid)),
         ip: ip.octets(),
+        slot_b: Arc::new(Mutex::new(Vec::new())),
     };
     let sim: &'static Mutex<Sim> = Box::leak(Box::new(Mutex::new(Sim::new(board))));
 
