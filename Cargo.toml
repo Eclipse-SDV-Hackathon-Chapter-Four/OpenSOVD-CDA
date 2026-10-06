@@ -25,6 +25,10 @@ ace-sim = { git = "https://github.com/samp-reston/ace.git", rev = "0706bef625fbd
 az3166-doip = { path = "crates/az3166-doip" }
 az3166-ecu = { path = "crates/az3166-ecu" }
 
+# ace-server vendored with local patches (vendor/ace-server/PATCHES.md)
+[patch."https://github.com/samp-reston/ace.git"]
+ace-server = { path = "vendor/ace-server" }
+
 [profile.release]
 opt-level = "s"
 lto = true

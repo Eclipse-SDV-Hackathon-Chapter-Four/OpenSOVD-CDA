@@ -1,0 +1,26 @@
+[package]
+name = "ace-server"
+version = "0.2.1"
+edition = "2024"
+authors = ["Samuel Preston <samp.reston@outlook.com>"]
+description = "UDS ECU server state machine. Handles all session management security access, timing, periodic DID scheduling, and NRC construction."
+readme = "README.md"
+repository = "https://github.com/samp-reston/ace"
+license = "MIT or Apache-2.0"
+keywords = ["diagnostics", "vehicle", "standards"]
+categories = ["development-tools", "network-programming", "automotive"]
+
+# Vendored from samp-reston/ace @ 0706bef625fbde1d8fadbd84ea21bb8ee650f7e4
+# and patched (see PATCHES.md). The sibling crates stay on the git revision.
+
+[features]
+default = []
+alloc = ["ace-core/alloc", "ace-uds/alloc"]
+std = ["alloc", "ace-core/std", "ace-uds/std", "ace-sim/std"]
+
+[dependencies]
+ace-core = { git = "https://github.com/samp-reston/ace.git", rev = "0706bef625fbde1d8fadbd84ea21bb8ee650f7e4", default-features = false }
+ace-uds = { git = "https://github.com/samp-reston/ace.git", rev = "0706bef625fbde1d8fadbd84ea21bb8ee650f7e4", default-features = false }
+ace-sim = { git = "https://github.com/samp-reston/ace.git", rev = "0706bef625fbde1d8fadbd84ea21bb8ee650f7e4", default-features = false }
+ace-proto = { git = "https://github.com/samp-reston/ace.git", rev = "0706bef625fbde1d8fadbd84ea21bb8ee650f7e4", default-features = false }
+heapless = "0.9.2"
