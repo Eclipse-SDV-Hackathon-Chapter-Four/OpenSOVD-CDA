@@ -14,7 +14,7 @@ All multi-byte values are **big-endian**. "R" = readable, "W" = writable.
 | Item | Value |
 |------|-------|
 | UDP / TCP port | 13400 |
-| ECU name (ODX / CDA component) | `FLXC1000_AZ3166` (`flxc1000_az3166`) |
+| ECU name (ODX / CDA component) | `AZ3166` (`az3166`) |
 | ECU logical address | `0x1001` |
 | Functional address | `0xFFFF` |
 | Default tester address | `0x0E00` |
@@ -30,8 +30,8 @@ from a persistent boot-state record in flash (last 128 KiB sector).
 
 | Variant | DID `F100` | Selected when |
 |---------|-----------|---------------|
-| Boot (`FLXC1000_AZ3166_Boot`) | `FF 00 00` | boot state = `boot_requested`, or button **B** held during reset |
-| App (`FLXC1000_AZ3166_App`) | `00 01 01` | boot state = `app_valid` or no record (factory default) |
+| Boot (`AZ3166_Boot`) | `FF 00 00` | boot state = `boot_requested`, or button **B** held during reset |
+| App (`AZ3166_App`) | `00 01 01` | boot state = `app_valid` or no record (factory default) |
 
 Transitions:
 
