@@ -33,9 +33,10 @@ pub use app::AppEcu;
 pub use board::{Board, BootState, FlashError, Sensor};
 pub use boot::BootEcu;
 
-pub const ECU_ADDRESS: u16 = 0x1000;
+/// 0x1001: distinct from the Raspberry Pi FLXC1000 (0x1000) on the same network.
+pub const ECU_ADDRESS: u16 = 0x1001;
 pub const FUNCTIONAL_ADDRESS: u16 = 0xFFFF;
-pub const VIN: &[u8; 17] = b"FLXC1000TEST00001";
+pub const VIN: &[u8; 17] = b"FLXC1000AZ3166001";
 
 /// DID 0xF195, space-padded crate version
 pub const SOFTWARE_VERSION: [u8; 8] = pad_version(env!("CARGO_PKG_VERSION").as_bytes());

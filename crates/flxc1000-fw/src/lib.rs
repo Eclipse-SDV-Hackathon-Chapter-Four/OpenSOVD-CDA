@@ -65,9 +65,9 @@ pub extern "C" fn flxc1000_init(boot_state: u32) {
     ECU_READY.store(true, Ordering::Release);
 
     let (title, text): (&[u8], &[u8]) = if ecu.is_app() {
-        (b"FLXC1000 App", b"FLXC1000")
+        (b"FLXC1000-AZ App", b"FLXC1000-AZ3166")
     } else {
-        (b"FLXC1000 Boot", b"BOOTLOADER")
+        (b"FLXC1000-AZ Boot", b"BOOTLOADER")
     };
     sys::display_line(0, title);
     sys::display_line(3, text);
