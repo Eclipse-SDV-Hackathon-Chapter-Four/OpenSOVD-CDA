@@ -18,7 +18,7 @@ All multi-byte values are **big-endian**. "R" = readable, "W" = writable.
 | ECU logical address | `0x1001` |
 | Functional address | `0xFFFF` |
 | Default tester address | `0x0E00` |
-| VIN (default) | `FLXC1000AZ3166001` |
+| VIN (default) | `AZ3166ECU00000001` |
 | EID | Wi-Fi MAC address |
 | GID | `00 00 00 00 00 00` |
 | IP | DHCP |
