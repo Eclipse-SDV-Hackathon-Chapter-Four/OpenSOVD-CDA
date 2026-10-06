@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
 #
-# FLXC1000 firmware for the MXCHIP AZ3166: C platform (STM32 HAL, ThreadX,
-# NetX Duo, WICED Wi-Fi) + Rust ECU (crates/flxc1000-fw, built with cargo).
+# AZ3166 ECU firmware for the MXCHIP AZ3166: C platform (STM32 HAL, ThreadX,
+# NetX Duo, WICED Wi-Fi) + Rust ECU (crates/az3166-fw, built with cargo).
 #
 #   cmake -S platform -B build -G Ninja \
 #         -DCMAKE_TOOLCHAIN_FILE=platform/cmake/arm-gcc-cortex-m4.cmake \
@@ -18,7 +18,7 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE MinSizeRel)
 endif()
 
-project(flxc1000_az3166 C ASM)
+project(az3166 C ASM)
 set(CMAKE_C_STANDARD 11)
 
 set(REPO_DIR "${CMAKE_CURRENT_LIST_DIR}/..")
@@ -100,53 +100,99 @@ set_target_properties(wiced_sdk PROPERTIES
 # ---- Rust firmware -----------------------------------------------------------------
 
 set(RUST_TARGET thumbv7em-none-eabihf)
-set(RUST_LIB "${REPO_DIR}/target/${RUST_TARGET}/release/libflxc1000_fw.a")
+set(RUST_LIB "${REPO_DIR}/target/${RUST_TARGET}/release/libaz3166_fw.a")
 file(GLOB_RECURSE RUST_SOURCES CONFIGURE_DEPENDS
     "${REPO_DIR}/crates/*.rs" "${REPO_DIR}/crates/*/Cargo.toml")
 add_custom_command(
     OUTPUT "${RUST_LIB}"
-    COMMAND cargo build --release --target ${RUST_TARGET} -p flxc1000-fw
+    COMMAND cargo build --release --target ${RUST_TARGET} -p az3166-fw
     WORKING_DIRECTORY "${REPO_DIR}"
     DEPENDS ${RUST_SOURCES} "${REPO_DIR}/Cargo.toml"
     COMMENT "Building Rust firmware (cargo)"
     USES_TERMINAL)
 add_custom_target(rust_fw DEPENDS "${RUST_LIB}")
-add_library(flxc1000_fw STATIC IMPORTED)
-set_target_properties(flxc1000_fw PROPERTIES IMPORTED_LOCATION "${RUST_LIB}")
-add_dependencies(flxc1000_fw rust_fw)
+add_library(az3166_fw STATIC IMPORTED)
+set_target_properties(az3166_fw PROPERTIES IMPORTED_LOCATION "${RUST_LIB}")
+add_dependencies(az3166_fw rust_fw)
 
-# ---- Firmware image ------------------------------------------------------------------
+# ---- Firmware images -----------------------------------------------------------------
+#
+#   az3166-boot.elf    bootloader at 0x08000000 (Boot variant + slot selection)
+#   az3166-app-a.elf   app linked for slot A (0x08060000)
+#   az3166-app-b.elf   app linked for slot B (0x080A0000)
+#
+#   az3166-factory.bin   1 MiB: bootloader + app in slot A + erased rest
+#                        (first flash over USB; resets the update state)
+#   update/az3166-app-<version>.bin
+#                        app update package for the CDA (both slots)
 
-add_executable(flxc1000
-    src/main.c
+set(APP_VERSION "0.2.0" CACHE STRING "App firmware version (display, DID F195, package)")
+set(BOOT_VERSION "0.2.0" CACHE STRING "Bootloader version")
+option(APP_TEST_HANG "Test only: app hangs at startup (exercises the rollback)" OFF)
+
+add_library(platform_common OBJECT
     src/board.c
     src/boot_state.c
     src/msp.c
     src/net.c
     src/syscalls.c
+    src/update.c
+    src/watchdog.c
     "${GSG}/app/startup/startup_stm32f412rx.s"
     "${GSG}/app/startup/tx_initialize_low_level.S")
-set_target_properties(flxc1000 PROPERTIES SUFFIX ".elf")
-target_include_directories(flxc1000 PRIVATE src)
-target_compile_options(flxc1000 PRIVATE
-    $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror>)
-set_source_files_properties(src/main.c PROPERTIES COMPILE_DEFINITIONS
-    "WIFI_SSID=\"${WIFI_SSID}\";WIFI_PASSWORD=\"${WIFI_PASSWORD}\"")
+target_include_directories(platform_common PUBLIC src)
+target_link_libraries(platform_common PUBLIC netxduo threadx wiced_sdk mxchip_bsp stm32hal)
+target_compile_options(platform_common PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror>)
 
-# The Rust library calls into the platform and vice versa: group them.
-target_link_libraries(flxc1000 PRIVATE
-    -Wl,--start-group
-    flxc1000_fw netxduo threadx wiced_sdk mxchip_bsp stm32hal
-    -Wl,--end-group
-    m)
-target_link_options(flxc1000 PRIVATE
-    "-T${CMAKE_CURRENT_LIST_DIR}/linker/az3166.ld"
-    "-Wl,-Map=${CMAKE_BINARY_DIR}/flxc1000.map"
-    "-Wl,--print-memory-usage")
-set_property(TARGET flxc1000 APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/linker/az3166.ld")
+set(LINKER_DIR "${CMAKE_CURRENT_LIST_DIR}/linker")
 
-add_custom_command(TARGET flxc1000 POST_BUILD
-    COMMAND ${CMAKE_OBJCOPY} -O binary flxc1000.elf flxc1000.bin
-    COMMAND ${CMAKE_SIZE} flxc1000.elf
+function(add_firmware_image name linker_script)
+    add_executable(${name} ${ARGN} $<TARGET_OBJECTS:platform_common>)
+    set_target_properties(${name} PROPERTIES SUFFIX ".elf")
+    target_include_directories(${name} PRIVATE src)
+    target_compile_options(${name} PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror>)
+    target_compile_definitions(${name} PRIVATE
+        "WIFI_SSID=\"${WIFI_SSID}\"" "WIFI_PASSWORD=\"${WIFI_PASSWORD}\"")
+    # The Rust library calls into the platform and vice versa: group them.
+    target_link_libraries(${name} PRIVATE
+        -Wl,--start-group
+        az3166_fw netxduo threadx wiced_sdk mxchip_bsp stm32hal
+        -Wl,--end-group
+        m)
+    target_link_options(${name} PRIVATE
+        "-L${LINKER_DIR}"
+        "-T${LINKER_DIR}/${linker_script}"
+        "-Wl,-Map=${CMAKE_BINARY_DIR}/${name}.map"
+        "-Wl,--print-memory-usage")
+    file(GLOB _ld "${LINKER_DIR}/*.ld")
+    set_property(TARGET ${name} APPEND PROPERTY LINK_DEPENDS ${_ld})
+    add_custom_command(TARGET ${name} POST_BUILD
+        COMMAND ${CMAKE_OBJCOPY} -O binary ${name}.elf ${name}.bin
+        COMMAND ${CMAKE_SIZE} ${name}.elf
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        VERBATIM)
+endfunction()
+
+add_firmware_image(az3166-boot boot.ld src/main.c src/bootloader.c)
+target_compile_definitions(az3166-boot PRIVATE FW_IMAGE_BOOT "FW_VERSION=\"${BOOT_VERSION}\"")
+
+foreach(slot a b)
+    add_firmware_image(az3166-app-${slot} app_${slot}.ld src/main.c)
+    target_compile_definitions(az3166-app-${slot} PRIVATE FW_IMAGE_APP "FW_VERSION=\"${APP_VERSION}\"")
+    if(APP_TEST_HANG)
+        target_compile_definitions(az3166-app-${slot} PRIVATE APP_TEST_HANG)
+    endif()
+endforeach()
+
+set(PACKAGE "${CMAKE_BINARY_DIR}/update/az3166-app-${APP_VERSION}.bin")
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/az3166-factory.bin" "${PACKAGE}"
+    COMMAND python3 -I "${REPO_DIR}/scripts/make-images.py"
+        --version "${APP_VERSION}"
+        --boot az3166-boot.bin --app-a az3166-app-a.bin --app-b az3166-app-b.bin
+        --factory az3166-factory.bin --package "${PACKAGE}"
+    DEPENDS az3166-boot az3166-app-a az3166-app-b "${REPO_DIR}/scripts/make-images.py"
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    COMMENT "Packaging factory image and app update"
     VERBATIM)
+add_custom_target(images ALL DEPENDS "${CMAKE_BINARY_DIR}/az3166-factory.bin" "${PACKAGE}")
