@@ -20,6 +20,7 @@
 pub mod app;
 pub mod board;
 pub mod boot;
+pub mod speech;
 pub mod update;
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
@@ -38,6 +39,10 @@ pub use boot::BootEcu;
 pub const ECU_ADDRESS: u16 = 0x1001;
 pub const FUNCTIONAL_ADDRESS: u16 = 0xFFFF;
 pub const VIN: &[u8; 17] = b"AZ3166ECU00000001";
+
+/// Audio volume: starts at the maximum (0 dB), changes in 10 % steps.
+pub const VOLUME_MAX: u8 = 100;
+pub const VOLUME_STEP: u8 = 10;
 
 pub const RESET_NONE: u8 = 0;
 pub const RESET_HARD: u8 = 1;
@@ -101,6 +106,10 @@ pub struct Shared {
     pub routine_status: AtomicU8,
     /// Set by RoutineControl Start, consumed by the routine task.
     pub routine_start: AtomicBool,
+    /// AnnounceTemperature routine: aborted by Stop (else completed when done).
+    pub announce_status: AtomicU8,
+    /// Audio output volume in percent (DID F213).
+    pub volume: AtomicU8,
     /// App data writable by WriteDataByIdentifier.
     pub vin: SeqBytes<17>,
     pub rgb: SeqBytes<3>,
@@ -114,6 +123,8 @@ impl Shared {
             session_type: AtomicU8::new(0x01),
             routine_status: AtomicU8::new(ROUTINE_IDLE),
             routine_start: AtomicBool::new(false),
+            announce_status: AtomicU8::new(ROUTINE_IDLE),
+            volume: AtomicU8::new(VOLUME_MAX),
             vin: SeqBytes::new(),
             rgb: SeqBytes::new(),
             display_text: SeqBytes::new(),

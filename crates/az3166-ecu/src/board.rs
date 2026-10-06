@@ -81,4 +81,14 @@ pub trait Board {
     fn flash_program(&self, address: u32, data: &[u8]) -> Result<(), FlashError>;
     /// Marks the slot at `base` as installed (on trial) and the App to run.
     fn update_commit(&self, base: u32) -> Result<(), FlashError>;
+
+    /// Starts speaking the word clips `words` (see `speech`) on the audio
+    /// output. False if audio is unavailable.
+    fn announce(&self, words: &[u8]) -> bool;
+    /// True while an announcement is playing.
+    fn announcing(&self) -> bool;
+    /// Stops an announcement.
+    fn announce_stop(&self);
+    /// Sets the audio output volume, 0..=100 % (0 = mute).
+    fn set_volume(&self, percent: u8);
 }
