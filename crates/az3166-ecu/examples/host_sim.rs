@@ -111,6 +111,17 @@ impl Board for SimBoard {
         cells.copy_from_slice(data);
         Ok(())
     }
+    fn announce(&self, words: &[u8]) -> bool {
+        println!("[board] announce words {:?}", words);
+        true
+    }
+    fn announcing(&self) -> bool {
+        false
+    }
+    fn announce_stop(&self) {}
+    fn set_volume(&self, percent: u8) {
+        println!("[board] volume {}%", percent);
+    }
     fn update_commit(&self, base: u32) -> Result<(), FlashError> {
         println!("[board] slot {:08X} installed (trial), App next", base);
         *self.boot_state.lock().unwrap() = BootState::AppValid;
