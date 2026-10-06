@@ -2,8 +2,8 @@
 # This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
 
 [package]
-name = "flxc1000-fw"
-description = "FLXC1000 firmware for the MXCHIP AZ3166, linked into the ThreadX platform"
+name = "az3166-fw"
+description = "AZ3166 ECU firmware for the MXCHIP AZ3166, linked into the ThreadX platform"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,6 +14,6 @@ test = false
 doctest = false
 
 [dependencies]
-flxc1000-doip = { workspace = true }
-flxc1000-ecu = { workspace = true }
+az3166-doip = { workspace = true }
+az3166-ecu = { workspace = true }
 heapless = { workspace = true }

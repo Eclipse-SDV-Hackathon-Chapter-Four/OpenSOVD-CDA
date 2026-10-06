@@ -29,6 +29,7 @@ extern "C" {
     pub fn plat_led_set(index: u32, duty_percent: u32);
     pub fn plat_rgb_set(r: u8, g: u8, b: u8);
     pub fn plat_display_line(line: u32, text: *const u8, len: u32);
+    pub fn plat_display_rotate(rotated: u32);
     pub fn plat_buttons() -> u32;
     pub fn plat_serial_number(out: *mut [u8; 12]);
 
@@ -42,6 +43,14 @@ extern "C" {
     pub fn plat_read_lis2mdl(magnetic_mg: *mut [f32; 3]) -> i32;
 
     pub fn plat_boot_state_write(state: u32) -> i32;
+
+    pub fn plat_version(out: *mut [u8; 16]);
+    pub fn plat_running_slot() -> u8;
+    pub fn plat_watchdog_kick();
+
+    pub fn plat_update_begin() -> u32;
+    pub fn plat_flash_program(address: u32, data: *const u8, len: u32) -> i32;
+    pub fn plat_update_commit(base: u32) -> i32;
 
     pub fn plat_net_mac(out: *mut [u8; 6]);
     pub fn plat_net_ip(out: *mut [u8; 4]);
@@ -74,6 +83,10 @@ pub fn display_line(line: u32, text: &[u8]) {
     unsafe { plat_display_line(line, text.as_ptr(), text.len() as u32) }
 }
 
+pub fn display_rotate(rotated: bool) {
+    unsafe { plat_display_rotate(rotated as u32) }
+}
+
 pub fn net_ip() -> [u8; 4] {
     let mut ip = [0; 4];
     unsafe { plat_net_ip(&mut ip) };
@@ -84,6 +97,25 @@ pub fn net_mac() -> [u8; 6] {
     let mut mac = [0; 6];
     unsafe { plat_net_mac(&mut mac) };
     mac
+}
+
+pub fn version() -> [u8; 16] {
+    let mut v = [0; 16];
+    unsafe { plat_version(&mut v) };
+    v
+}
+
+/// 'A' / 'B' for an app slot, 'L' for the bootloader.
+pub fn running_slot() -> u8 {
+    unsafe { plat_running_slot() }
+}
+
+pub fn watchdog_kick() {
+    unsafe { plat_watchdog_kick() }
+}
+
+pub fn buttons() -> u8 {
+    unsafe { plat_buttons() as u8 }
 }
 
 pub fn reset() -> ! {

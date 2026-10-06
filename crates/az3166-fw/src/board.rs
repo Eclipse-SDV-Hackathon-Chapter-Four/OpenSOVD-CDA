@@ -5,7 +5,7 @@
 
 //! `Board` implementation for the MXCHIP AZ3166 on top of the C platform.
 
-use flxc1000_ecu::board::{Board, BootState, FlashError, Sensor};
+use az3166_ecu::board::{Board, BootState, FlashError, Sensor};
 
 use crate::sys;
 
@@ -84,10 +84,12 @@ impl Board for Az3166 {
 
     fn set_rgb(&self, rgb: [u8; 3]) {
         unsafe { sys::plat_rgb_set(rgb[0], rgb[1], rgb[2]) }
+        crate::screens::show_did(0xF211);
     }
 
-    fn set_display_text(&self, text: &[u8; 16]) {
-        sys::display_line(3, text)
+    fn set_display_text(&self, _text: &[u8; 16]) {
+        // Shown by the DisplayText screen; switch to it so the change is seen.
+        crate::screens::show_did(0xF212);
     }
 
     fn write_boot_state(&self, state: BootState) -> Result<(), FlashError> {
@@ -96,6 +98,31 @@ impl Board for Az3166 {
             BootState::BootRequested => sys::BOOT_STATE_BOOT_REQUESTED,
         };
         match unsafe { sys::plat_boot_state_write(raw) } {
+            0 => Ok(()),
+            _ => Err(FlashError),
+        }
+    }
+
+    fn software_version(&self) -> [u8; 16] {
+        sys::version()
+    }
+
+    fn update_begin(&self) -> Option<u32> {
+        match unsafe { sys::plat_update_begin() } {
+            0 => None,
+            base => Some(base),
+        }
+    }
+
+    fn flash_program(&self, address: u32, data: &[u8]) -> Result<(), FlashError> {
+        match unsafe { sys::plat_flash_program(address, data.as_ptr(), data.len() as u32) } {
+            0 => Ok(()),
+            _ => Err(FlashError),
+        }
+    }
+
+    fn update_commit(&self, base: u32) -> Result<(), FlashError> {
+        match unsafe { sys::plat_update_commit(base) } {
             0 => Ok(()),
             _ => Err(FlashError),
         }
