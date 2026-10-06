@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
+
+[package]
+name = "flxc1000-ecu"
+description = "FLXC1000 ECU behaviour (App and Boot variants) on top of ace-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ace-server = { workspace = true }
+ace-sim = { workspace = true }
+heapless = { workspace = true }
+
+[dev-dependencies]
+flxc1000-doip = { workspace = true }
