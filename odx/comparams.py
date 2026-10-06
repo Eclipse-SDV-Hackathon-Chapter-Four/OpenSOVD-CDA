@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
 #
-# Communication parameters of the FLXC1000 base variant. Modelled like the
+# Communication parameters of the AZ3166 base variant. Modelled like the
 # Eclipse OpenSOVD Classic Diagnostic Adapter test container
 # (testcontainer/odx/comparams.py, Apache-2.0): every value is emitted once per
 # protocol layer the base variant inherits from.
@@ -13,6 +13,11 @@ from helper import ref
 
 # Protocol layers referenced by the base variant (see base/*.odx-d).
 PROTOCOLS = ("UDS_Ethernet_DoIP", "UDS_Ethernet_DoIP_DOBT")
+
+
+P6_MAX_US = 2_000_000
+P6_STAR_US = 8_000_000
+RC78_COMPLETION_US = 30_000_000
 
 
 def generate_comparam_refs(
@@ -34,6 +39,11 @@ def generate_comparam_refs(
         (doip.comparams["CP_DoIPLogicalTesterAddress"], tester_address),
         (uds.comparams["CP_P2Max"], p2_max_us),
         (uds.comparams["CP_P2Star"], p2_star_us),
+        # Tester timeouts. RequestDownload erases an app slot: the ECU sends
+        # responsePending, then stalls for up to ~4 s (single flash bank).
+        (uds.comparams["CP_P6Max"], P6_MAX_US),
+        (uds.comparams["CP_P6Star"], P6_STAR_US),
+        (uds.comparams["CP_RC78CompletionTimeout"], RC78_COMPLETION_US),
     ]
     resp_id_table = doip.complex_comparams["CP_UniqueRespIdTable"]
 
