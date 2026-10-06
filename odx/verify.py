@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
 #
-# Loads FLXC1000.pdx back with odxtools, lists the services/DIDs of every
+# Loads FLXC1000_AZ3166.pdx back with odxtools, lists the services/DIDs of every
 # layer and checks a set of encode/decode round trips against the byte
 # sequences in docs/diagnostics.md. Exits non-zero on any mismatch.
 
@@ -56,9 +56,9 @@ def main(pdx: str):
         for svc in sorted(layer.services, key=lambda s: s.short_name):
             print("   " + service_line(svc))
 
-    base = db.diag_layers["FLXC1000"]
-    app = db.diag_layers["FLXC1000_App"]
-    boot = db.diag_layers["FLXC1000_Boot"]
+    base = db.diag_layers["FLXC1000_AZ3166"]
+    app = db.diag_layers["FLXC1000_AZ3166_App"]
+    boot = db.diag_layers["FLXC1000_AZ3166_Boot"]
 
     print("\n== layer inheritance ==")
 
@@ -78,7 +78,7 @@ def main(pdx: str):
     print("\n== comparams ==")
     cps = {(cp.short_name, cp.protocol_snref): cp.value for cp in base.comparam_refs}
     for name, expected in [
-        ("CP_DoIPLogicalGatewayAddress", "4096"),
+        ("CP_DoIPLogicalGatewayAddress", "4097"),
         ("CP_DoIPLogicalFunctionalAddress", "65535"),
         ("CP_DoIPLogicalTesterAddress", "3584"),
         ("CP_P2Max", "50000"),
@@ -87,7 +87,7 @@ def main(pdx: str):
         for proto in ("UDS_Ethernet_DoIP", "UDS_Ethernet_DoIP_DOBT"):
             check(f"{name} [{proto}] = {expected}", cps.get((name, proto)) == expected)
     resp_table = cps.get(("CP_UniqueRespIdTable", "UDS_Ethernet_DoIP_DOBT"))
-    check("CP_UniqueRespIdTable", resp_table == ["4096", "0", "FLXC1000"], str(resp_table))
+    check("CP_UniqueRespIdTable", resp_table == ["4097", "0", "FLXC1000_AZ3166"], str(resp_table))
 
     print("\n== encode / decode ==")
 
@@ -164,4 +164,4 @@ def main(pdx: str):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else os.path.join(SCRIPT_DIR, "FLXC1000.pdx")))
+    sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else os.path.join(SCRIPT_DIR, "FLXC1000_AZ3166.pdx")))
