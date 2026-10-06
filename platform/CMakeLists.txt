@@ -173,11 +173,16 @@ function(add_firmware_image name linker_script)
         VERBATIM)
 endfunction()
 
-add_firmware_image(az3166-boot boot.ld src/main.c src/bootloader.c)
+add_firmware_image(az3166-boot boot.ld src/main.c src/bootloader.c src/audio_stub.c)
 target_compile_definitions(az3166-boot PRIVATE FW_IMAGE_BOOT "FW_VERSION=\"${BOOT_VERSION}\"")
 
+set(SPEECH_WORDS "${CMAKE_CURRENT_LIST_DIR}/assets/speech_words.bin")
+set_source_files_properties(src/speech_data.S PROPERTIES
+    COMPILE_DEFINITIONS "SPEECH_WORDS_FILE=\"${SPEECH_WORDS}\""
+    OBJECT_DEPENDS "${SPEECH_WORDS}")
+
 foreach(slot a b)
-    add_firmware_image(az3166-app-${slot} app_${slot}.ld src/main.c)
+    add_firmware_image(az3166-app-${slot} app_${slot}.ld src/main.c src/audio.c src/speech_data.S)
     target_compile_definitions(az3166-app-${slot} PRIVATE FW_IMAGE_APP "FW_VERSION=\"${APP_VERSION}\"")
     if(APP_TEST_HANG)
         target_compile_definitions(az3166-app-${slot} PRIVATE APP_TEST_HANG)
