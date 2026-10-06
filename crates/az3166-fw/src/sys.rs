@@ -48,6 +48,11 @@ extern "C" {
     pub fn plat_running_slot() -> u8;
     pub fn plat_watchdog_kick();
 
+    pub fn plat_audio_say(words: *const u8, len: u32) -> i32;
+    pub fn plat_audio_busy() -> i32;
+    pub fn plat_audio_stop();
+    pub fn plat_audio_set_volume(percent: u32);
+
     pub fn plat_update_begin() -> u32;
     pub fn plat_flash_program(address: u32, data: *const u8, len: u32) -> i32;
     pub fn plat_update_commit(base: u32) -> i32;

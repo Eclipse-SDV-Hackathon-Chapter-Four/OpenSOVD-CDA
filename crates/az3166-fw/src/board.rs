@@ -121,6 +121,23 @@ impl Board for Az3166 {
         }
     }
 
+    fn announce(&self, words: &[u8]) -> bool {
+        unsafe { sys::plat_audio_say(words.as_ptr(), words.len() as u32) != 0 }
+    }
+
+    fn announcing(&self) -> bool {
+        unsafe { sys::plat_audio_busy() != 0 }
+    }
+
+    fn announce_stop(&self) {
+        unsafe { sys::plat_audio_stop() }
+    }
+
+    fn set_volume(&self, percent: u8) {
+        unsafe { sys::plat_audio_set_volume(percent as u32) }
+        crate::screens::show_did(0xF213);
+    }
+
     fn update_commit(&self, base: u32) -> Result<(), FlashError> {
         match unsafe { sys::plat_update_commit(base) } {
             0 => Ok(()),
