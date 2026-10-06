@@ -5,13 +5,21 @@
 # Diagnostic Adapter test container (testcontainer/odx/routines.py,
 # Apache-2.0). docs/diagnostics.md "Routines (App)".
 
+from odxtools.compumethods.compumethod import CompuCategory
+from odxtools.compumethods.identicalcompumethod import IdenticalCompuMethod
+from odxtools.dataobjectproperty import DataObjectProperty
 from odxtools.diaglayers.diaglayerraw import DiagLayerRaw
 from odxtools.diagservice import DiagService
+from odxtools.encoding import Encoding
+from odxtools.minmaxlengthtype import MinMaxLengthType
 from odxtools.nameditemlist import NamedItemList
 from odxtools.parameters.parameter import Parameter
 from odxtools.parameters.valueparameter import ValueParameter
+from odxtools.physicaltype import PhysicalType
 from odxtools.request import Request
 from odxtools.response import Response, ResponseType
+from odxtools.termination import Termination
+from odxtools.odxtypes import DataType
 
 from helper import (
     coded_const_int_parameter,
@@ -30,6 +38,9 @@ from helper import (
 
 ROUTINE_TYPE_TO_SUBFUNCTION = {"Start": 0x01, "Stop": 0x02, "RequestResults": 0x03}
 
+# Longest SpeakText text (crates/az3166-ecu/src/board.rs MAX_SPEECH_TEXT)
+MAX_SPEECH_TEXT = 200
+
 
 def add_routine(
     base: DiagLayerRaw,
@@ -39,9 +50,10 @@ def add_routine(
     routine_type: str,
     response_params: list[Parameter] | None = None,
     description: str | None = None,
+    request_params: list[Parameter] | None = None,
     sessions: list[str] | None = None,
 ):
-    """31 <type> <rid:2> -> 71 <type> <rid:2> [response_params]"""
+    """31 <type> <rid:2> [request_params] -> 71 <type> <rid:2> [response_params]"""
     subfunction = ROUTINE_TYPE_TO_SUBFUNCTION[routine_type]
     service_name = f"{name}_{routine_type}"
 
@@ -53,6 +65,7 @@ def add_routine(
                 sid_parameter_rq(0x31),
                 subfunction_rq(subfunction, "RoutineControlType"),
                 coded_const_int_parameter("RoutineId", "DATA", 2, str(routine_id), 16),
+                *(request_params or []),
             ]
         ),
     )
@@ -127,7 +140,7 @@ def add_routine_control_services(base: DiagLayerRaw, dlr: DiagLayerRaw):
         )
 
     # 31 01 10 02 -> 71 01 10 02 01 (speaks the ambient temperature on the
-    # headphone jack, e.g. "twenty three point five degrees celsius")
+    # headphone jack: "The temperature is 23.5 degrees Celsius.")
     # 31 02 10 02 -> 71 02 10 02 03
     # 31 03 10 02 -> 71 03 10 02 <status>
     for routine_type, description in [
@@ -141,6 +154,56 @@ def add_routine_control_services(base: DiagLayerRaw, dlr: DiagLayerRaw):
             name="AnnounceTemperature",
             routine_id=0x1002,
             routine_type=routine_type,
+            response_params=status_param(),
+            description=description,
+            sessions=["Default", "Extended"],
+        )
+
+    # 31 01 10 05 <text> -> 71 01 10 05 01 (speaks 1..200 bytes of printable
+    # ASCII on the headphone jack; replaces a running AnnounceTemperature)
+    # 31 02 10 05 -> 71 02 10 05 03
+    # 31 03 10 05 -> 71 03 10 05 <status>
+    text_dop = DataObjectProperty(
+        odx_id=derived_id(dlr, "DOP.SpeechText"),
+        short_name="SpeechText",
+        compu_method=IdenticalCompuMethod(
+            category=CompuCategory.IDENTICAL,
+            physical_type=DataType.A_UNICODE2STRING,
+            internal_type=DataType.A_UNICODE2STRING,
+        ),
+        diag_coded_type=MinMaxLengthType(
+            base_data_type=DataType.A_ASCIISTRING,
+            base_type_encoding=Encoding.ISO_8859_1,
+            min_length=1,
+            max_length=MAX_SPEECH_TEXT,
+            termination=Termination.END_OF_PDU,
+        ),
+        physical_type=PhysicalType(base_data_type=DataType.A_UNICODE2STRING),
+    )
+    dlr.diag_data_dictionary_spec.data_object_props.append(text_dop)
+    for routine_type, description in [
+        ("Start", "Speak Text"),
+        ("Stop", "Speak Text Stop"),
+        ("RequestResults", "Speak Text Request Results"),
+    ]:
+        add_routine(
+            base,
+            dlr,
+            name="SpeakText",
+            routine_id=0x1005,
+            routine_type=routine_type,
+            request_params=(
+                [
+                    ValueParameter(
+                        short_name="Text",
+                        semantic="DATA",
+                        byte_position=4,
+                        dop_ref=ref(text_dop),
+                    )
+                ]
+                if routine_type == "Start"
+                else None
+            ),
             response_params=status_param(),
             description=description,
             sessions=["Default", "Extended"],

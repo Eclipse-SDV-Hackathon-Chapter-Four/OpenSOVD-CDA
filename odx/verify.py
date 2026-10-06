@@ -147,6 +147,10 @@ def main(pdx: str):
     check("AnnounceTemperature_Start", raw.hex() == "31011002", raw.hex())
     m = decode(app, "71 03 10 02 01")
     check("AnnounceTemperature_RequestResults -> Running", m.param_dict.get("RoutineStatus") == "Running")
+    raw = app.services["SpeakText_Start"].encode_request(Text="Hello, world.")
+    check("SpeakText_Start", raw.hex() == "31011005" + b"Hello, world.".hex(), raw.hex())
+    m = decode(app, "71 03 10 05 02")
+    check("SpeakText_RequestResults -> Completed", m.param_dict.get("RoutineStatus") == "Completed")
     m = decode(app, "71 03 10 01 02")
     check("SelfTest_RequestResults -> Completed", m.param_dict.get("RoutineStatus") == "Completed")
 
