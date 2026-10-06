@@ -1,0 +1,269 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
+"""Update the AZ3166 app through the Eclipse OpenSOVD Classic Diagnostic Adapter.
+
+    scripts/az3166-flash                         # newest build/update/*.bin
+    scripts/az3166-flash path/to/az3166-app-0.3.0.bin
+    scripts/az3166-flash --cda http://host:20002 --flash-dir DIR package.bin
+
+Needs a running CDA with the AZ3166 MDD and a flash files directory
+(scripts/run-cda.sh <board-ip> serves build/update). A package outside that
+directory is copied into it.
+
+Sequence (SOVD -> UDS):
+  lock, reset to the Boot variant if the App runs (11 01), Programming session
+  (10 02), SecurityAccess seed/key (27 03 / 27 04), RequestDownload (34),
+  TransferData (36, CDA flashtransfer), RequestTransferExit (37), hard reset
+  (11 01). The bootloader then starts the new app on trial; it confirms
+  itself once its DoIP is up, otherwise the bootloader rolls back.
+
+Only the Python standard library is used.
+"""
+
+import argparse
+import json
+import re
+import shutil
+import struct
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+APP_REGION = 0x08060000
+BLOCK_SIZE = 4093  # maxNumberOfBlockLength 4095 minus SID and counter
+KEY_MASK = 0xDEADBEEF
+PACKAGE_MAGIC = b"AZ3166UP"
+
+
+class CdaError(Exception):
+    pass
+
+
+class Cda:
+    def __init__(self, base: str, ecu: str):
+        self.base = base.rstrip("/") + "/vehicle/v15"
+        self.ecu = ecu
+        self.token = None
+
+    def request(self, method: str, path: str, body=None, ok=(200, 201, 202, 204), timeout=120):
+        url = path if path.startswith("http") else self.base + path
+        data = None
+        headers = {}
+        if body is not None:
+            data = json.dumps(body).encode()
+            headers["Content-Type"] = "application/json"
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        req = urllib.request.Request(url, data=data, method=method, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                status, raw = resp.status, resp.read()
+        except urllib.error.HTTPError as e:
+            status, raw = e.code, e.read()
+        except urllib.error.URLError as e:
+            raise CdaError(f"{method} {url}: {e.reason}") from None
+        if status not in ok:
+            raise CdaError(f"{method} {path}: HTTP {status} {raw.decode(errors='replace')}")
+        return json.loads(raw) if raw else None
+
+    def component(self, sub: str = "") -> str:
+        return f"/components/{self.ecu}{sub}"
+
+    def authorize(self):
+        resp = self.request("POST", "/authorize", {"client_id": "test", "client_secret": "test"})
+        self.token = resp["access_token"]
+
+    def lock(self):
+        self.request("POST", self.component("/locks"), {"lock_expiration": 600})
+
+    def unlock(self):
+        locks = self.request("GET", self.component("/locks")) or {}
+        for item in locks.get("items", []):
+            if item.get("owned"):
+                self.request("DELETE", self.component(f"/locks/{item['id']}"), ok=(200, 204, 404))
+
+    def variant(self) -> dict:
+        return self.request("GET", self.component())["variant"]
+
+    def detect_variant(self):
+        self.request("PUT", self.component(), ok=(200, 201, 202, 204, 409))
+
+    def read(self, data_id: str) -> dict:
+        return self.request("GET", self.component(f"/data/{data_id}"))["data"]
+
+    def session(self, name: str):
+        self.request("PUT", self.component("/modes/session"), {"value": name})
+
+    def reset(self):
+        self.request(
+            "POST",
+            self.component("/operations/reset/executions"),
+            {"parameters": {"value": "hardreset"}},
+            ok=(200, 202, 204),
+        )
+
+
+def step(text: str):
+    print(f"==> {text}", flush=True)
+
+
+def wait_for_variant(cda: Cda, suffix: str, timeout_s: float) -> dict:
+    """Waits until the ECU is online in the variant ending with `suffix`."""
+    deadline = time.monotonic() + timeout_s
+    last = None
+    while time.monotonic() < deadline:
+        try:
+            cda.detect_variant()
+            variant = cda.variant()
+            last = variant
+            if variant.get("state", "").lower() == "online" and variant.get("name", "").endswith(suffix):
+                return variant
+        except CdaError:
+            pass
+        time.sleep(2)
+    raise CdaError(f"ECU not online as *{suffix} within {timeout_s:.0f} s (last: {last})")
+
+
+def read_package(path: Path) -> str:
+    data = path.read_bytes()
+    if len(data) < 96 or data[:8] != PACKAGE_MAGIC:
+        raise SystemExit(f"{path}: not an AZ3166 update package")
+    return data[8:24].rstrip(b"\0").decode()
+
+
+def flash_file_id(cda: Cda, name: str, size: int) -> str:
+    # Listing the files also fills the CDA's file cache used by flashtransfer.
+    files = cda.request("GET", "/apps/sovd2uds/bulk-data/flashfiles")
+    wanted = re.sub(r"[^A-Za-z0-9_]", "_", name)
+    for item in files.get("items", []):
+        if item.get("id") == wanted:
+            if item.get("size") not in (None, size):
+                raise CdaError(f"CDA sees {name} with size {item.get('size')}, expected {size}")
+            return item["id"]
+    ids = [i.get("id") for i in files.get("items", [])]
+    raise CdaError(f"{name} not in the CDA flash files ({ids}); is --flash-dir the CDA's flash_files_path?")
+
+
+def security_access(cda: Cda):
+    seed = cda.request("PUT", cda.component("/modes/security"), {"value": "Level_3_RequestSeed"})
+    seed_bytes = bytes(int(b, 16) for b in seed["seed"]["Request_Seed"].split())
+    key = struct.unpack(">I", seed_bytes[:4])[0] ^ KEY_MASK
+    key_text = " ".join(f"0x{b:02x}" for b in struct.pack(">I", key))
+    cda.request("PUT", cda.component("/modes/security"), {"value": "Level_3", "Key": {"Send_Key": key_text}})
+
+
+def transfer(cda: Cda, file_id: str, size: int):
+    job = cda.request(
+        "POST",
+        cda.component("/x-sovd2uds-download/flashtransfer"),
+        {"blocksequencecounter": 1, "blocksize": BLOCK_SIZE, "offset": 0, "length": size, "id": file_id},
+    )
+    job_id = job["id"]
+    start = time.monotonic()
+    while True:
+        status = cda.request("GET", cda.component(f"/x-sovd2uds-download/flashtransfer/{job_id}"))
+        state = str(status.get("status", "")).lower()
+        done = int(status.get("acknowledgedBytes") or status.get("acknowledged_bytes") or 0)
+        pct = 100 * done // size if size else 100
+        rate = done / max(time.monotonic() - start, 0.001) / 1024
+        print(f"\r    {pct:3d}%  {done}/{size} bytes  {rate:5.1f} KiB/s", end="", flush=True)
+        if state in ("finished", "aborted", "error", "failed"):
+            print()
+            break
+        time.sleep(0.5)
+    cda.request("DELETE", cda.component(f"/x-sovd2uds-download/flashtransfer/{job_id}"), ok=(200, 204, 404))
+    if state != "finished":
+        raise CdaError(f"transfer {state}: {status}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("package", nargs="?", type=Path, help="update package (default: newest in --flash-dir)")
+    parser.add_argument("--cda", default="http://localhost:20002", help="CDA base URL")
+    parser.add_argument("--ecu", default="az3166", help="CDA component id")
+    parser.add_argument("--flash-dir", type=Path, default=ROOT / "build" / "update",
+                        help="the CDA's flash_files_path")
+    parser.add_argument("--no-reset", action="store_true", help="stop after the transfer (no final reset)")
+    args = parser.parse_args()
+
+    flash_dir = args.flash_dir.resolve()
+    package = args.package
+    if package is None:
+        candidates = sorted(flash_dir.glob("*.bin"), key=lambda p: p.stat().st_mtime)
+        if not candidates:
+            raise SystemExit(f"no package in {flash_dir}; build one with scripts/build.sh")
+        package = candidates[-1]
+    package = package.resolve()
+    version = read_package(package)
+    if package.parent != flash_dir:
+        flash_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(package, flash_dir / package.name)
+        package = flash_dir / package.name
+    size = package.stat().st_size
+    print(f"Package {package.name}: app {version}, {size} bytes")
+
+    cda = Cda(args.cda, args.ecu)
+    try:
+        step("Authorize and lock")
+        cda.authorize()
+        cda.lock()
+
+        variant = wait_for_variant(cda, "", 30)
+        if variant["name"].endswith("_App"):
+            current = cda.read("SoftwareVersion").get("SoftwareVersion", "?").strip()
+            step(f"App {current} running: reset into the bootloader")
+            cda.session("extended")
+            cda.reset()
+            time.sleep(3)
+        variant = wait_for_variant(cda, "_Boot", 90)
+        cda.lock()
+
+        step("Programming session and security access")
+        cda.session("programming")
+        security_access(cda)
+
+        step("Request download (erases the inactive app slot)")
+        file_id = flash_file_id(cda, package.name, size)
+        resp = cda.request(
+            "PUT",
+            cda.component("/x-sovd2uds-download/requestdownload"),
+            {"requestdownload": {"MemoryAddress": APP_REGION, "MemorySize": size}},
+        )
+        print(f"    {resp}")
+
+        step("Transfer")
+        transfer(cda, file_id, size)
+
+        step("Transfer exit (verifies the image)")
+        cda.request("PUT", cda.component("/x-sovd2uds-download/transferexit"))
+
+        if args.no_reset:
+            step("Done; the new app starts on the next hard reset")
+            return
+        step("Reset: the bootloader starts the new app on trial")
+        cda.reset()
+        time.sleep(3)
+        wait_for_variant(cda, "_App", 180)
+        new = cda.read("SoftwareVersion").get("SoftwareVersion", "?").strip()
+        if new != version:
+            raise CdaError(
+                f"App {version} did not come up: the bootloader rolled back to {new} "
+                "(see the board console for the failed starts)"
+            )
+        step(f"App {new} running")
+    except CdaError as e:
+        print(f"\nERROR: {e}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        try:
+            cda.unlock()
+        except CdaError:
+            pass
+
+
+if __name__ == "__main__":
+    main()
