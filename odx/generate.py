@@ -1,16 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
 #
-# Generates FLXC1000_AZ3166.pdx (ODX 2.2.0) for the FLXC1000-AZ3166 ECU simulator from
+# Generates AZ3166.pdx (ODX 2.2.0) for the AZ3166 ECU simulator (FLXC1000 fork) from
 # docs/diagnostics.md. Approach and layout follow the Eclipse OpenSOVD Classic
 # Diagnostic Adapter test container (testcontainer/odx/generate.py,
 # Apache-2.0): odxtools builds the database in Python, the PDX is then
 # converted to MDD with eclipse-opensovd/odx-converter for the CDA.
 #
 # Layers:
-#   BV FLXC1000_AZ3166          services common to both variants
-#   EV FLXC1000_AZ3166_Boot    variant ID FF 00 00 (DID F100)
-#   EV FLXC1000_AZ3166_App    variant ID 00 01 01 (DID F100)
+#   BV AZ3166          services common to both variants
+#   EV AZ3166_Boot    variant ID FF 00 00 (DID F100)
+#   EV AZ3166_App    variant ID 00 01 01 (DID F100)
 
 import os
 import sys
@@ -49,7 +49,7 @@ from units import add_units
 
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 
-ECU_NAME = "FLXC1000_AZ3166"
+ECU_NAME = "AZ3166"
 LOGICAL_ADDRESS = 0x1001
 # The ECU is its own DoIP entity, so the gateway address is its logical address.
 GATEWAY_ADDRESS = 0x1001
@@ -86,7 +86,7 @@ def add_base_variant(dlc: DiagLayerContainer, database: Database) -> BaseVariant
     base = BaseVariantRaw(
         odx_id=OdxLinkId(local_id=f"BV.{ECU_NAME}", doc_fragments=dlc.odx_id.doc_fragments),
         short_name=ECU_NAME,
-        long_name="FLXC1000 ECU simulator (MXCHIP AZ3166)",
+        long_name="AZ3166 ECU simulator (MXCHIP AZ3166 IoT DevKit)",
         variant_type=DiagLayerType.BASE_VARIANT,
         comparam_refs=generate_comparam_refs(
             database=database,

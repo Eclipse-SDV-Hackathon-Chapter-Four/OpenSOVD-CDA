@@ -57,9 +57,9 @@ def add_company_datas(dlc: DiagLayerContainer):
     dlc.company_datas = NamedItemList(
         [
             CompanyData(
-                odx_id=OdxLinkId("CD.FLXC1000_AZ3166", doc_fragments=dlc.odx_id.doc_fragments),
-                short_name="FLXC1000_AZ3166",
-                long_name="FLXC1000 ECU simulator for the MXCHIP AZ3166",
+                odx_id=OdxLinkId("CD.AZ3166", doc_fragments=dlc.odx_id.doc_fragments),
+                short_name="AZ3166",
+                long_name="AZ3166 ECU simulator for the MXCHIP AZ3166 IoT DevKit",
                 description=Description.from_string(
                     "UDS-over-DoIP ECU simulator (STM32F412, ThreadX, DoIP over Wi-Fi)"
                 ),
