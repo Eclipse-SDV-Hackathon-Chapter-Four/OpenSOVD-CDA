@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+# This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
+
+[package]
+name = "flxc1000-fw"
+description = "FLXC1000 firmware for the MXCHIP AZ3166, linked into the ThreadX platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["staticlib"]
+test = false
+doctest = false
+
+[dependencies]
+flxc1000-doip = { workspace = true }
+flxc1000-ecu = { workspace = true }
+heapless = { workspace = true }
