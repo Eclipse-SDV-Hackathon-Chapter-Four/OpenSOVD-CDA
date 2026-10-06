@@ -1,35 +1,28 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * Linker script for the MXCHIP AZ3166 (STM32F412RG: 1 MiB flash, 256 KiB SRAM).
+ * Output sections shared by the bootloader and app images of the MXCHIP
+ * AZ3166 (STM32F412RG). INCLUDEd inside SECTIONS by boot.ld / app_*.ld,
+ * which define the FLASH and RAM regions.
  * Derived from MXChip_AZ3166.ld of the Azure RTOS getting-started guides,
  * Copyright (c) Microsoft Corporation.
  *
- * Changes: full 256 KiB SRAM, last flash sector reserved for the boot-state
- * log, explicit heap and main-stack regions, no CCM RAM (F412 has none).
+ * Changes: full 256 KiB SRAM, explicit heap and main-stack regions, no CCM
+ * RAM (F412 has none).
  */
 
-ENTRY(Reset_Handler)
-
-_Heap_Size  = 16K;  /* malloc: used by the WICED Wi-Fi driver */
-_Stack_Size = 4K;   /* main stack: reset, tx_application_define, ISRs */
-
-MEMORY
-{
-  FLASH     (rx)  : ORIGIN = 0x08000000, LENGTH = 896K
-  BOOTSTATE (r)   : ORIGIN = 0x080E0000, LENGTH = 128K   /* sector 11 */
-  RAM       (xrw) : ORIGIN = 0x20000000, LENGTH = 256K
-}
-
-__boot_state_start__ = ORIGIN(BOOTSTATE);
-__boot_state_end__   = ORIGIN(BOOTSTATE) + LENGTH(BOOTSTATE);
-
-SECTIONS
-{
   .isr_vector :
   {
     . = ALIGN(4);
     KEEP(*(.isr_vector))
+    . = ALIGN(4);
+  } >FLASH
+
+  /* Image header at a fixed offset after the vector table (image_info.h). */
+  .image_info :
+  {
+    . = ALIGN(0x200);
+    KEEP(*(.image_info))
     . = ALIGN(4);
   } >FLASH
 
@@ -138,4 +131,3 @@ SECTIONS
   }
 
   .ARM.attributes 0 : { *(.ARM.attributes) }
-}
