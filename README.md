@@ -107,6 +107,7 @@ App ──11 01──▶ Boot ──34/36/37 + 11 01──▶ new App (trial) �
 | Wi-Fi LED | on = DHCP address acquired |
 | OLED | firmware version and one screen per readable DID (see below) |
 | LSM6DSL accelerometer | turns the display content by 180° when the board is held upside down |
+| NAU88C10 codec, headphone jack | routine `1002` speaks the temperature (connect headphones or a speaker) |
 | STM32 unique ID / RNG | DID `F18C` / SecurityAccess seed |
 
 ### Display
@@ -126,6 +127,9 @@ field, RGB LED, display text, IP, MAC, uptime, VIN, session, variant, serial
 number, software version); the bootloader shows network, session, variant,
 serial number and version. Values refresh every second. Writing the RGB LED
 or the display text through UDS switches to that screen.
+
+On the **Volume** screen, holding a button changes the volume instead (see
+[Temperature announcement](#temperature-announcement)).
 
 When the board is tilted upside down (more than ~0.5 g on the
 accelerometer's display axis), the display content turns by 180° so it stays
@@ -202,6 +206,37 @@ TOKEN=$(curl -s -X POST $B/authorize -H 'Content-Type: application/json' \
   -d '{"client_id":"test","client_secret":"test"}' | jq -r .access_token)
 curl -s -H "Authorization: Bearer $TOKEN" $B/components/az3166/data/AmbientTemperature
 ```
+
+## Temperature announcement
+
+Routine `1002` AnnounceTemperature speaks the ambient temperature on the
+headphone jack (connect headphones or an active speaker), e.g. "twenty three
+point five degrees celsius". It works in the Default session:
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  $B/components/az3166/locks -d '{"lock_expiration": 300}'
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  $B/components/az3166/operations/AnnounceTemperature/executions -d '{}'
+```
+
+The volume starts at 100 % after every reset and changes in 10 % steps:
+
+| Control | How |
+|---------|-----|
+| Routines `1003` VolumeUp / `1004` VolumeDown | `POST $B/components/az3166/operations/VolumeUp/executions -d '{}'` (synchronous, returns the new volume) |
+| DID `F213` AudioVolume | read in any session; write 0–100 in the Extended session |
+| Volume screen | hold the next button (B) for louder, the previous button (A) for quieter (first step after 0.6 s, then every 0.3 s); a short tap still pages |
+
+The codec's headphone output has no analog volume, so the volume is the DAC
+digital gain (register `0x0B`): −50 dB at 1 % up to 0 dB at 100 %, 0 % mutes.
+
+The words are pre-recorded clips (zero–nineteen, the tens, hundred, minus,
+point, degrees, celsius): 4-bit IMA ADPCM at 8 kHz, 66 KB in the app image
+(`platform/assets/speech_words.bin`). They were generated with the macOS
+speech synthesizer by `scripts/make-speech.py`; run it on a Mac to change the
+voice or the words. The codec (I2C `0x1A`) is fed by I2S2 with circular DMA
+(`platform/src/audio.c`).
 
 ## Update the app through the CDA
 
@@ -287,7 +322,10 @@ Own code: Apache-2.0. Files derived from the Azure RTOS getting-started guides
 (`platform/linker/sections.ld`, `platform/src/board.c/.h`, `msp.c`, `net.c/.h`) keep their MIT
 notice. Nothing third-party is vendored: `third_party/` is fetched. The WICED
 Wi-Fi library and BCM43362 firmware are Cypress property, licensed for use with
-Cypress chips only (the AZ3166's EMW3166 module).
+Cypress chips only (the AZ3166's EMW3166 module). The word clips in
+`platform/assets/speech_words.bin` are voice output of Apple's macOS speech
+synthesizer and subject to Apple's license terms, not Apache-2.0 (see
+`speech_words.bin.license`); regenerate them with `scripts/make-speech.py`.
 
 ## AI disclaimer
 
