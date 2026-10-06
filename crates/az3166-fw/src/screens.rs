@@ -6,7 +6,7 @@
 //! OLED screens: one per readable DID (plus the network state). Button A
 //! shows the previous screen, button B the next one, wrapping around. The
 //! content is turned by 180 degrees when the board is held upside down
-//! (accelerometer).
+//! (accelerometer); the buttons then swap roles.
 //!
 //! ```text
 //! line 0  App 0.2.0 A        variant, firmware version, slot
@@ -202,12 +202,14 @@ impl Ui {
         let pressed = buttons & !self.last_buttons;
         self.last_buttons = buttons;
         let n = self.screens.len();
-        // A: previous, B: next
-        if pressed & 0x01 != 0 {
+        // A: previous, B: next. Upside down the buttons swap sides, so they
+        // swap roles too: the left button always goes back.
+        let (previous, next) = if self.rotated { (0x02, 0x01) } else { (0x01, 0x02) };
+        if pressed & previous != 0 {
             self.index = (self.index + n - 1) % n;
             self.dirty = true;
         }
-        if pressed & 0x02 != 0 {
+        if pressed & next != 0 {
             self.index = (self.index + 1) % n;
             self.dirty = true;
         }
