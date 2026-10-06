@@ -7,10 +7,10 @@
 
 use core::cell::UnsafeCell;
 
-use flxc1000_doip::connection::INACTIVITY_TIMEOUT_MS;
-use flxc1000_doip::message::VehicleAnnouncement;
-use flxc1000_doip::{udp, Connection, DoipConfig, SendError, Transport, UdsHandler};
-use flxc1000_ecu::{ECU_ADDRESS, FUNCTIONAL_ADDRESS, VIN};
+use az3166_doip::connection::INACTIVITY_TIMEOUT_MS;
+use az3166_doip::message::VehicleAnnouncement;
+use az3166_doip::{udp, Connection, DoipConfig, SendError, Transport, UdsHandler};
+use az3166_ecu::{ECU_ADDRESS, FUNCTIONAL_ADDRESS, VIN};
 
 use crate::sys;
 
@@ -56,8 +56,24 @@ impl Transport for TcpTransport {
 /// Hands UDS requests to the UDS worker thread.
 struct Worker;
 
+/// RequestDownload in the bootloader erases an app slot: the CPU stalls for
+/// seconds (single flash bank), so responsePending goes out first.
+fn is_erase(request: &[u8]) -> bool {
+    request[0] == 0x34 && !crate::IS_APP.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+/// Time for the responsePending to leave the Wi-Fi driver before the stall.
+const PENDING_FLUSH_MS: u32 = 200;
+
 impl UdsHandler for Worker {
+    fn response_pending(&self, request: &[u8]) -> bool {
+        is_erase(request)
+    }
+
     fn handle(&mut self, source: u16, _target: u16, request: &[u8], response: &mut [u8]) -> usize {
+        if is_erase(request) {
+            sys::sleep_ms(PENDING_FLUSH_MS);
+        }
         unsafe {
             sys::plat_uds_execute(
                 source,
@@ -72,7 +88,7 @@ impl UdsHandler for Worker {
 
 /// DoIP TCP slot thread.
 #[no_mangle]
-pub extern "C" fn flxc1000_tcp_task(slot: u32) -> ! {
+pub extern "C" fn az3166_tcp_task(slot: u32) -> ! {
     // SAFETY: this thread is the only user of its slot.
     let connection = unsafe { &mut *SLOTS[slot as usize].0.get() };
     let mut buf = [0u8; RECV_CHUNK];
@@ -119,7 +135,7 @@ fn serve(slot: u32, connection: &mut Connection, buf: &mut [u8]) {
 
 /// DoIP UDP thread: vehicle announcements and identification responses.
 #[no_mangle]
-pub extern "C" fn flxc1000_udp_task() -> ! {
+pub extern "C" fn az3166_udp_task() -> ! {
     // Wait for DHCP: the announcement must carry a usable source address.
     while sys::net_ip() == [0; 4] {
         sys::sleep_ms(200);
