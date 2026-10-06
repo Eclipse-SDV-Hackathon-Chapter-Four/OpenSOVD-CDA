@@ -63,6 +63,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "az3166-doip"
+version = "0.2.0"
+dependencies = [
+ "heapless",
+]
+
+[[package]]
+name = "az3166-ecu"
+version = "0.2.0"
+dependencies = [
+ "ace-server",
+ "ace-sim",
+ "az3166-doip",
+ "heapless",
+]
+
+[[package]]
+name = "az3166-fw"
+version = "0.2.0"
+dependencies = [
+ "az3166-doip",
+ "az3166-ecu",
+ "heapless",
+]
+
+[[package]]
 name = "byteorder"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -100,32 +126,6 @@ dependencies = [
  "darling_core",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "flxc1000-doip"
-version = "0.1.0"
-dependencies = [
- "heapless",
-]
-
-[[package]]
-name = "flxc1000-ecu"
-version = "0.1.0"
-dependencies = [
- "ace-server",
- "ace-sim",
- "flxc1000-doip",
- "heapless",
-]
-
-[[package]]
-name = "flxc1000-fw"
-version = "0.1.0"
-dependencies = [
- "flxc1000-doip",
- "flxc1000-ecu",
- "heapless",
 ]
 
 [[package]]
