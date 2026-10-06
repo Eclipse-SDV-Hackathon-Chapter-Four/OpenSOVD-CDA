@@ -1,10 +1,10 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- This file is 100% AI-generated (Claude Code, Claude Opus 5.5). -->
 
-# FLXC1000-AZ3166 Diagnostic Specification
+# AZ3166 ECU Diagnostic Specification
 
 This document is the single source of truth for the diagnostic surface of the
-firmware. The firmware (`crates/flxc1000-ecu`) and the ODX description
+firmware. The firmware (`crates/az3166-ecu`) and the ODX description
 (`odx/`) both implement exactly this.
 
 All multi-byte values are **big-endian**. "R" = readable, "W" = writable.
@@ -25,19 +25,23 @@ All multi-byte values are **big-endian**. "R" = readable, "W" = writable.
 
 ## Variants
 
-One firmware image contains both variants. Which one runs is decided at reset
-from a persistent boot-state record in flash (last 128 KiB sector).
+The Boot variant is the bootloader (fixed); the App variant is the
+updatable app, stored in one of two slots. The bootloader decides at reset
+from the boot/update state log in flash (last 128 KiB sector).
 
-| Variant | DID `F100` | Selected when |
-|---------|-----------|---------------|
-| Boot (`AZ3166_Boot`) | `FF 00 00` | boot state = `boot_requested`, or button **B** held during reset |
-| App (`AZ3166_App`) | `00 01 01` | boot state = `app_valid` or no record (factory default) |
+| Variant | DID `F100` | Runs when |
+|---------|-----------|-----------|
+| Boot (`AZ3166_Boot`) | `FF 00 00` | Boot requested by the App, button **B** held during reset, or no valid app |
+| App (`AZ3166_App`) | `00 01 01` | otherwise: the slot on trial, else the active (confirmed) slot |
 
 Transitions:
 
-- App `11 01` (HardReset) → writes `boot_requested`, resets → Boot.
-- Boot `37` (RequestTransferExit) after a completed download → writes
-  `app_valid`. The next `11 01` resets → App.
+- App `11 01` (HardReset) → requests Boot, resets → Boot.
+- Boot `37` (RequestTransferExit) after a verified download → the written
+  slot is on trial and the App is requested. The next `11 01` starts it.
+- An app on trial confirms its slot when DoIP is up. If it hangs or faults
+  (watchdog), or is not up within 120 s, the bootloader retries; after 3
+  failed starts it rejects the slot and runs the previous one (rollback).
 - Boot `11 03` (SoftReset) → resets, stays in Boot.
 
 ## Sessions
@@ -76,10 +80,22 @@ S3 = 5000 ms.
 
 ### Download (Boot)
 
-- `34 00 44 <addr:4> <size:4>` → `74 20 0F FF` (maxNumberOfBlockLength = 4095)
-- `36 <bsc> <data...>` → `76 <bsc>`. Data is counted and discarded (no real
-  flashing; the AZ3166 keeps running the same image).
-- `37` → `77`, marks the App as valid.
+The download is an app update package (`scripts/make-images.py`): a 96-byte
+header (magic `AZ3166UP`, version, per slot: link address, offset, size,
+CRC-32) followed by the app linked for slot A and for slot B.
+
+- `34 00 44 <addr:4> <size:4>`: address must be `08 06 00 00` (app area),
+  size the package size. Erases the inactive slot; the ECU answers
+  `7F 34 78` (responsePending) first, then `74 20 0F FF`
+  (maxNumberOfBlockLength = 4095: up to 4093 data bytes per `36`).
+- `36 <bsc> <data...>` → `76 <bsc>`. Counter starts at 1 and wraps
+  `FF → 00`; a repeated counter is acknowledged without writing (tester
+  retry). Out of sequence: NRC `73`. Package not for this ECU: NRC `31`.
+- `37` → `77` once the whole package arrived and the CRC-32 of the written
+  image matches; otherwise NRC `72`. The written slot is then on trial.
+
+Tester timing (MDD comparams): `CP_P6Max` 2 s, `CP_P6Star` 8 s (wait after
+`78`, covers the 2–4 s erase), `CP_RC78CompletionTimeout` 30 s.
 
 ## Data identifiers
 
@@ -97,7 +113,6 @@ S3 = 5000 ms.
 | DID | Name | Len | Type / scaling | Unit | Access |
 |-----|------|-----|----------------|------|--------|
 | `F190` | VIN | 17 | ASCII | – | R; W in session 03 |
-| `F200` | FluxCapacitorPowerConsumption | 4 | sint32, factor 1 (default 1210) | MW | R (pulses LED1 while read) |
 | `F201` | AmbientTemperature | 2 | sint16, physical = raw × 0.1 | °C | R (HTS221) |
 | `F202` | RelativeHumidity | 2 | uint16, physical = raw × 0.1 | %RH | R (HTS221) |
 | `F203` | AtmosphericPressure | 2 | uint16, physical = raw × 0.1 | hPa | R (LPS22HB) |
@@ -132,8 +147,6 @@ blue. The Wi-Fi LED shows network state and is not part of the bar.
 
 | DTC | Name | Initial status | Set by |
 |-----|------|----------------|--------|
-| `01E240` | FluxCapacitorOverload (simulated) | `2F` | always present at boot |
-| `039447` | TemporalDisplacementCircuit (simulated) | `24` | always present at boot |
 | `C10100` | HumidityTemperatureSensorNoResponse | `09` | HTS221 init failed |
 | `C10200` | PressureSensorNoResponse | `09` | LPS22HB init failed |
 | `C10300` | InertialSensorNoResponse | `09` | LSM6DSL init failed |
