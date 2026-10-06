@@ -139,6 +139,14 @@ def main(pdx: str):
 
     m = decode(app, "71 01 10 01 01")
     check("SelfTest_Start -> Running", m.param_dict.get("RoutineStatus") == "Running")
+    m = decode(app, "71 01 10 04 5A")
+    check("VolumeDown -> 90 %", m.param_dict.get("Volume") == 90, str(m.param_dict))
+    m = decode(app, "62 F2 13 64")
+    check("F213 AudioVolume 100 %", m.param_dict.get("AudioVolume") == 100, str(m.param_dict))
+    raw = app.services["AnnounceTemperature_Start"].encode_request()
+    check("AnnounceTemperature_Start", raw.hex() == "31011002", raw.hex())
+    m = decode(app, "71 03 10 02 01")
+    check("AnnounceTemperature_RequestResults -> Running", m.param_dict.get("RoutineStatus") == "Running")
     m = decode(app, "71 03 10 01 02")
     check("SelfTest_RequestResults -> Completed", m.param_dict.get("RoutineStatus") == "Completed")
 

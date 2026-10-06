@@ -266,6 +266,21 @@ def add_app_dids(base: DiagLayerRaw, app: DiagLayerRaw):
         write_sessions=WRITE_SESSIONS,
     )
 
+    # F213 AudioVolume, uint8 0..100 %; R; W in session 03
+    volume_dop = add_dop(int_dop(app, "Percent_UInt8", False, 8, unit("Percent")))
+    add_service_did(
+        base,
+        app,
+        "AudioVolume",
+        "AudioVolume",
+        0xF213,
+        volume_dop,
+        funct_class="StoredData",
+        semantic="STOREDDATA",
+        long_name="Audio Volume",
+        write_sessions=WRITE_SESSIONS,
+    )
+
     # F220 IpAddress, 4 x uint8 (dotted quad)
     ip_struct = add_struct(
         struct_of(app, "IpAddress", ["Octet1", "Octet2", "Octet3", "Octet4"], uint8, 1)

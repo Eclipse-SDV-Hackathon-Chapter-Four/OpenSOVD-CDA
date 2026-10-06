@@ -3,7 +3,7 @@
 #
 # RoutineControl (0x31) services. Modelled like the Eclipse OpenSOVD Classic
 # Diagnostic Adapter test container (testcontainer/odx/routines.py,
-# Apache-2.0). docs/diagnostics.md "Routines (App, session 03)".
+# Apache-2.0). docs/diagnostics.md "Routines (App)".
 
 from odxtools.diaglayers.diaglayerraw import DiagLayerRaw
 from odxtools.diagservice import DiagService
@@ -24,6 +24,7 @@ from helper import (
     sid_parameter_pr,
     sid_parameter_rq,
     subfunction_rq,
+    find_dop,
     texttable_int_str_dop,
 )
 
@@ -123,4 +124,51 @@ def add_routine_control_services(base: DiagLayerRaw, dlr: DiagLayerRaw):
             response_params=status_param(),
             description=description,
             sessions=["Extended"],
+        )
+
+    # 31 01 10 02 -> 71 01 10 02 01 (speaks the ambient temperature on the
+    # headphone jack, e.g. "twenty three point five degrees celsius")
+    # 31 02 10 02 -> 71 02 10 02 03
+    # 31 03 10 02 -> 71 03 10 02 <status>
+    for routine_type, description in [
+        ("Start", "Announce Temperature"),
+        ("Stop", "Announce Temperature Stop"),
+        ("RequestResults", "Announce Temperature Request Results"),
+    ]:
+        add_routine(
+            base,
+            dlr,
+            name="AnnounceTemperature",
+            routine_id=0x1002,
+            routine_type=routine_type,
+            response_params=status_param(),
+            description=description,
+            sessions=["Default", "Extended"],
+        )
+
+    # Volume one step (10 %) up / down. Start only, so the CDA runs them
+    # synchronously and returns the new volume.
+    # 31 01 10 03 -> 71 01 10 03 <volume %>
+    # 31 01 10 04 -> 71 01 10 04 <volume %>
+    volume_dop = find_dop(dlr, "Percent_UInt8")
+    for name, rid, description in [
+        ("VolumeUp", 0x1003, "Volume Up (+10 %)"),
+        ("VolumeDown", 0x1004, "Volume Down (-10 %, 0 = mute)"),
+    ]:
+        add_routine(
+            base,
+            dlr,
+            name=name,
+            routine_id=rid,
+            routine_type="Start",
+            response_params=[
+                ValueParameter(
+                    short_name="Volume",
+                    semantic="DATA",
+                    byte_position=4,
+                    dop_ref=ref(volume_dop),
+                )
+            ],
+            description=description,
+            sessions=["Default", "Extended"],
         )

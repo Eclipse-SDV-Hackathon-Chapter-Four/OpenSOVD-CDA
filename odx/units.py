@@ -47,6 +47,7 @@ def add_units(dlr: DiagLayerRaw):
         unit("Second", "s", 1, 0, pdim_time),
         unit("DegreeCelsius", "°C", 1, 273.15, pdim_temperature),
         unit("PerCentRelativeHumidity", "%RH", 0.01, 0, pdim_raw),
+        unit("Percent", "%", 0.01, 0, pdim_raw),
         unit("HectoPascal", "hPa", 100, 0, pdim_pressure),
         unit("MilliG", "mg", _G_N / 1000, 0, pdim_acceleration),
         unit("DegreePerSecond", "dps", 0.017453292519943296, 0, pdim_angular_velocity),
