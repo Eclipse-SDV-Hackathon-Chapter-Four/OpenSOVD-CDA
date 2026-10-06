@@ -12,11 +12,11 @@ test container
 ([`testcontainer/odx`](https://github.com/eclipse-opensovd/classic-diagnostic-adapter/tree/main/testcontainer/odx)):
 
 1. Python scripts build the database with [`odxtools`](https://github.com/mercedes-benz/odxtools)
-   (pinned to the same version, `11.0.0`) and write `FLXC1000.pdx`.
+   (pinned to the same version, `11.0.0`) and write `FLXC1000_AZ3166.pdx`.
 2. [`odx-converter`](https://github.com/eclipse-opensovd/odx-converter) turns the PDX
-   into `FLXC1000.mdd`, which the CDA loads.
+   into `FLXC1000_AZ3166.mdd`, which the CDA loads.
 
-Both `FLXC1000.pdx` and `FLXC1000.mdd` are checked in, so you only need to run the
+Both `FLXC1000_AZ3166.pdx` and `FLXC1000_AZ3166.mdd` are checked in, so you only need to run the
 build after changing the database.
 
 ## Build
@@ -43,10 +43,10 @@ Docker build of the PDX only, the same way as the reference `generate_docker.sh`
 Manual steps:
 
 ```sh
-.venv/bin/python generate.py          # -> FLXC1000.pdx
+.venv/bin/python generate.py          # -> FLXC1000_AZ3166.pdx
 .venv/bin/python verify.py            # load back, list services, encode/decode checks
-java -jar converter-all.jar convert FLXC1000.pdx   # newer odx-converter (subcommands)
-java -jar converter-all.jar FLXC1000.pdx           # older odx-converter
+java -jar converter-all.jar convert FLXC1000_AZ3166.pdx   # newer odx-converter (subcommands)
+java -jar converter-all.jar FLXC1000_AZ3166.pdx           # older odx-converter
 ```
 
 Set `SOURCE_DATE_EPOCH` for a reproducible `ADMIN-DATA` timestamp.
@@ -73,12 +73,12 @@ Set `SOURCE_DATE_EPOCH` for a reproducible `ADMIN-DATA` timestamp.
 
 | Item | Value |
 |------|-------|
-| ECU / base variant | `FLXC1000` |
-| ECU variants | `FLXC1000_Boot` (`FF 00 00`), `FLXC1000_App` (`00 01 01`) |
+| ECU / base variant | `FLXC1000_AZ3166` |
+| ECU variants | `FLXC1000_AZ3166_Boot` (`FF 00 00`), `FLXC1000_AZ3166_App` (`00 01 01`) |
 | Variant detection | `Identification_Read` (`22 F1 00`), out param `Identification` (uint24) |
 | Protocols | `UDS_Ethernet_DoIP`, `UDS_Ethernet_DoIP_DOBT` (as in the reference) |
-| `CP_UniqueRespIdTable` | logical address `0x1000`, name `FLXC1000` |
-| `CP_DoIPLogicalGatewayAddress` | `0x1000` (the ECU is its own DoIP entity) |
+| `CP_UniqueRespIdTable` | logical address `0x1001`, name `FLXC1000_AZ3166` |
+| `CP_DoIPLogicalGatewayAddress` | `0x1001` (the ECU is its own DoIP entity) |
 | `CP_DoIPLogicalFunctionalAddress` | `0xFFFF` |
 | `CP_DoIPLogicalTesterAddress` | `0x0E00` |
 | `CP_P2Max` / `CP_P2Star` | 50 ms / 5000 ms (values in µs) |
