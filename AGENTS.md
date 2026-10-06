@@ -107,9 +107,10 @@ cargo clippy --release --target thumbv7em-none-eabihf -p az3166-fw
   (6, 2 KiB), `routine` (8, 2 KiB: watchdog, self test, screens/buttons).
   DoIP threads hand requests to the worker via a ThreadX queue
   (`plat_uds_execute`).
-- RAM is ~97 % used. The ECU static is ~136 KiB because ace-server's outbox
-  is 16 x 4 KiB and `drain_outbox` needs a same-sized buffer. `on_read_did`
-  needs ~8.5 KiB stack, `az3166_init` ~14.6 KiB. Check stack frames with
+- RAM: ~128 KiB free in the app. The ECU static is ~11 KiB, mostly
+  ace-server's outbox (`OUTBOX` = 2 x 4 KiB frames, drained with
+  `drain_outbox_with` — no second copy). `on_read_did` needs ~8 KiB stack,
+  `az3166_init` ~14.6 KiB. Check stack frames with
   `arm-none-eabi-objdump` before adding large locals.
 - State shared outside the worker lives in `Shared` (atomics / `SeqBytes`
   seqlocks; single writer, readers retry — no locks that could invert priorities).
@@ -120,6 +121,10 @@ cargo clippy --release --target thumbv7em-none-eabihf -p az3166-fw
   ThreadX mutex (newlib's `lock.o` is not weak; define all its symbols).
 
 ## ace-server gaps (pinned rev 0706bef), handled in `az3166-ecu`
+
+ace-server itself is vendored in `vendor/ace-server` (Cargo `[patch]`) for a
+configurable outbox; see `vendor/ace-server/PATCHES.md`. Its sibling crates
+stay on the git revision.
 
 - Handler errors are returned as `Err(ServerError::Handler)`, not queued as
   NRC -> `serve()` builds the `7F` response.

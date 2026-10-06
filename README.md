@@ -320,7 +320,8 @@ machine.
 
 Own code: Apache-2.0. Files derived from the Azure RTOS getting-started guides
 (`platform/linker/sections.ld`, `platform/src/board.c/.h`, `msp.c`, `net.c/.h`) keep their MIT
-notice. Nothing third-party is vendored: `third_party/` is fetched. The WICED
+notice. `vendor/ace-server` is ace-server (Apache-2.0, `vendor/ace-server/LICENSE`)
+with a small patch (`PATCHES.md`); everything else in `third_party/` is fetched. The WICED
 Wi-Fi library and BCM43362 firmware are Cypress property, licensed for use with
 Cypress chips only (the AZ3166's EMW3166 module). The word clips in
 `platform/assets/speech_words.bin` are voice output of Apple's macOS speech
