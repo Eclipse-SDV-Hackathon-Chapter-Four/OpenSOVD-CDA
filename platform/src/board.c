@@ -179,8 +179,59 @@ static void GPIO_Init(void)
     HAL_GPIO_Init(GPIOB, &gpio);
 }
 
+static void short_delay(void)
+{
+    for (volatile int i = 0; i < 200; i++) /* ~5 us at 96 MHz */
+    {
+    }
+}
+
+/* A device can hold SDA low after an interrupted transfer, and an MCU reset
+ * does not release it. Clock SCL until SDA is free, then send a STOP. */
+static void I2C1_BusRecover(void)
+{
+    GPIO_InitTypeDef gpio = {0};
+
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8 | GPIO_PIN_9, GPIO_PIN_SET);
+    gpio.Pin   = GPIO_PIN_8 | GPIO_PIN_9; /* SCL, SDA */
+    gpio.Mode  = GPIO_MODE_OUTPUT_OD;
+    gpio.Pull  = GPIO_PULLUP;
+    gpio.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOB, &gpio);
+    short_delay();
+
+    if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_9) == GPIO_PIN_RESET)
+    {
+        int pulses = 0;
+        while (pulses < 9 && HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_9) == GPIO_PIN_RESET)
+        {
+            HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_RESET);
+            short_delay();
+            HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_SET);
+            short_delay();
+            pulses++;
+        }
+        printf("I2C: bus held low, recovered after %d clock pulses\r\n", pulses);
+    }
+    /* STOP: SDA rises while SCL is high */
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET);
+    short_delay();
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_SET);
+    short_delay();
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET);
+    short_delay();
+
+    /* Clear a BUSY flag latched by the I2C peripheral. */
+    __HAL_RCC_I2C1_CLK_ENABLE();
+    __HAL_RCC_I2C1_FORCE_RESET();
+    __HAL_RCC_I2C1_RELEASE_RESET();
+}
+
 static void I2C1_Init(void)
 {
+    I2C1_BusRecover();
+
     I2cHandle.Instance             = I2C1;
     I2cHandle.Init.ClockSpeed      = I2C_SPEEDCLOCK;
     I2cHandle.Init.DutyCycle       = I2C_DUTYCYCLE_2;
@@ -320,6 +371,16 @@ static void i2c_unlock(void)
     {
         tx_mutex_put(&i2c_mutex);
     }
+}
+
+void board_i2c_lock(void)
+{
+    i2c_lock();
+}
+
+void board_i2c_unlock(void)
+{
+    i2c_unlock();
 }
 
 /* ---- platform API -------------------------------------------------------- */

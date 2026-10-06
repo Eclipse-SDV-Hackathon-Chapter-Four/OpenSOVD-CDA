@@ -36,5 +36,8 @@ extern I2C_HandleTypeDef I2cHandle;
 void board_init(void);
 /* Creates the RTOS objects used by the board functions. */
 void board_rtos_init(void);
+/* Serialises the shared I2C bus (sensors, display, audio codec). */
+void board_i2c_lock(void);
+void board_i2c_unlock(void);
 
 #endif
