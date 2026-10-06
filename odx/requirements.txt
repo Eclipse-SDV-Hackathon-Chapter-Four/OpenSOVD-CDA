@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+# This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
+# Same version as the reference (classic-diagnostic-adapter testcontainer/odx).
+odxtools==11.0.0
