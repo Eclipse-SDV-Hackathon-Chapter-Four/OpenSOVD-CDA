@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
+[toolchain]
+channel = "stable"
+targets = ["thumbv7em-none-eabihf"]
+components = ["clippy", "rustfmt"]

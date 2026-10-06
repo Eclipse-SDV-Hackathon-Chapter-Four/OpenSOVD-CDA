@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: Apache-2.0
+# This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
+#
+# FLXC1000 ECU simulator for the MXCHIP AZ3166 IoT DevKit (STM32F412, ThreadX).
+# Independent fork of https://github.com/theswiftfox/flxc1000-rpi.
+
+[workspace]
+resolver = "2"
+members = ["crates/flxc1000-doip", "crates/flxc1000-ecu", "crates/flxc1000-fw"]
+# Host-testable crates; the firmware crate only builds for thumbv7em-none-eabihf.
+default-members = ["crates/flxc1000-doip", "crates/flxc1000-ecu"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+heapless = "0.9"
+
+# ace — Automotive Communication Engine (UDS server), built without `std`
+ace-server = { git = "https://github.com/samp-reston/ace.git", rev = "0706bef625fbde1d8fadbd84ea21bb8ee650f7e4", default-features = false }
+ace-sim = { git = "https://github.com/samp-reston/ace.git", rev = "0706bef625fbde1d8fadbd84ea21bb8ee650f7e4", default-features = false }
+
+flxc1000-doip = { path = "crates/flxc1000-doip" }
+flxc1000-ecu = { path = "crates/flxc1000-ecu" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+debug = true
+panic = "abort"
+
+[profile.dev]
+opt-level = 1
+panic = "abort"
