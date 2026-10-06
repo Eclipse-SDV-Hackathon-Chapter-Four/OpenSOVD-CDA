@@ -24,7 +24,8 @@ use ace_server::server::UdsServer;
 use ace_sim::clock::Duration as AceDuration;
 use ace_sim::io::NodeAddress;
 
-use crate::board::{Board, BootState, FlashError};
+use crate::board::{Board, FlashError};
+use crate::update::{self, Block, Download, UpdateError};
 use crate::{common_did, Policy, Shared, ECU_ADDRESS, FUNCTIONAL_ADDRESS, RESET_HARD, RESET_SOFT};
 
 /// Boot variant identification: DID 0xF100 = 0xFF0000
@@ -40,8 +41,15 @@ pub const KEY_MASK: u32 = 0xDEAD_BEEF;
 pub struct BootHandler<B: Board> {
     board: B,
     shared: &'static Shared,
-    /// Bytes received in the current download, `None` if none is active.
-    download: Option<u32>,
+    download: Option<Download>,
+}
+
+/// Parses a big-endian address / size field of RequestDownload.
+fn be_value(bytes: &[u8]) -> Option<u32> {
+    if bytes.is_empty() || bytes.len() > 4 {
+        return None;
+    }
+    Some(bytes.iter().fold(0u32, |acc, b| (acc << 8) | *b as u32))
 }
 
 impl<B: Board> ServerHandler for BootHandler<B> {
@@ -68,16 +76,31 @@ impl<B: Board> ServerHandler for BootHandler<B> {
 
     fn request_download(
         &mut self,
-        _memory_address: &[u8],
-        _memory_size: &[u8],
+        memory_address: &[u8],
+        memory_size: &[u8],
         _compression_method: u8,
         _encrypting_method: u8,
         buf: &mut [u8],
     ) -> Result<usize, BuiltinNrc> {
-        // Simulated: data is counted and discarded, the image is not replaced.
-        self.download = Some(0);
+        let (Some(address), Some(size)) = (be_value(memory_address), be_value(memory_size)) else {
+            return Err(BuiltinNrc::RequestOutOfRange);
+        };
+        // The package goes to the app area; the slot is picked here.
+        if address != update::APP_REGION
+            || size < update::HEADER_SIZE as u32
+            || size > update::MAX_PACKAGE_SIZE
+        {
+            return Err(BuiltinNrc::RequestOutOfRange);
+        }
+        // A repeated RequestDownload (tester retry) restarts the download.
+        self.download = None;
+        let target = self
+            .board
+            .update_begin()
+            .ok_or(BuiltinNrc::UploadDownloadNotAccepted)?;
+        self.download = Some(Download::new(target, size));
         // lengthFormatIdentifier: 0x20 (2 bytes for maxBlockLength)
-        // maxNumberOfBlockLength: 0x0FFF (4095 bytes)
+        // maxNumberOfBlockLength: 0x0FFF (4095 bytes: SID + counter + 4093 data)
         buf[..3].copy_from_slice(&[0x20, 0x0F, 0xFF]);
         Ok(3)
     }
@@ -86,16 +109,25 @@ impl<B: Board> ServerHandler for BootHandler<B> {
         &mut self,
         block_sequence_counter: u8,
         data: &[u8],
-        buf: &mut [u8],
+        _buf: &mut [u8],
     ) -> Result<usize, BuiltinNrc> {
-        let total = self
+        let download = self
             .download
             .as_mut()
             .ok_or(BuiltinNrc::RequestSequenceError)?;
-        *total = total.saturating_add(data.len() as u32);
-        // ace-server echoes the block sequence counter itself.
-        let _ = (block_sequence_counter, buf);
-        Ok(0)
+        match download.check_block(block_sequence_counter) {
+            // ace-server echoes the block sequence counter itself.
+            Block::Repeat => Ok(0),
+            Block::Wrong => Err(BuiltinNrc::WrongBlockSequenceCounter),
+            Block::Next => match download.write_block(block_sequence_counter, data, &self.board) {
+                Ok(()) => Ok(0),
+                Err(UpdateError::TooMuchData) => Err(BuiltinNrc::TransferDataSuspended),
+                Err(UpdateError::BadPackage | UpdateError::NoImageForSlot) => {
+                    Err(BuiltinNrc::RequestOutOfRange)
+                }
+                Err(_) => Err(BuiltinNrc::GeneralProgrammingFailure),
+            },
+        }
     }
 
     fn request_transfer_exit(
@@ -103,12 +135,16 @@ impl<B: Board> ServerHandler for BootHandler<B> {
         _parameter_record: &[u8],
         _buf: &mut [u8],
     ) -> Result<usize, BuiltinNrc> {
-        if self.download.take().is_none() {
-            return Err(BuiltinNrc::RequestSequenceError);
-        }
-        // Download complete: the next hard reset starts the App.
+        let download = self
+            .download
+            .take()
+            .ok_or(BuiltinNrc::RequestSequenceError)?;
+        download
+            .verify()
+            .map_err(|_| BuiltinNrc::GeneralProgrammingFailure)?;
+        // Download complete: the next hard reset starts the new app on trial.
         self.board
-            .write_boot_state(BootState::AppValid)
+            .update_commit(download.target())
             .map_err(|FlashError| BuiltinNrc::GeneralProgrammingFailure)?;
         Ok(0)
     }
