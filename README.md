@@ -129,7 +129,8 @@ or the display text through UDS switches to that screen.
 
 When the board is tilted upside down (more than ~0.5 g on the
 accelerometer's display axis), the display content turns by 180° so it stays
-readable; lying flat keeps the current orientation. The axis and its sign are
+readable and the buttons swap roles (the left button always goes back);
+lying flat keeps the current orientation. The axis and its sign are
 `ORIENTATION_AXIS` / `UPRIGHT_SIGN` in `crates/az3166-fw/src/screens.rs`.
 
 ## Build
