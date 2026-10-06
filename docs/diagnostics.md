@@ -1,0 +1,150 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- This file is 100% AI-generated (Claude Code, Claude Opus 5.5). -->
+
+# FLXC1000-AZ3166 Diagnostic Specification
+
+This document is the single source of truth for the diagnostic surface of the
+firmware. The firmware (`crates/flxc1000-ecu`) and the ODX description
+(`odx/`) both implement exactly this.
+
+All multi-byte values are **big-endian**. "R" = readable, "W" = writable.
+
+## Transport (ISO 13400 DoIP over Wi-Fi)
+
+| Item | Value |
+|------|-------|
+| UDP / TCP port | 13400 |
+| ECU logical address | `0x1000` |
+| Functional address | `0xFFFF` |
+| Default tester address | `0x0E00` |
+| VIN (default) | `FLXC1000TEST00001` |
+| EID | Wi-Fi MAC address |
+| GID | `00 00 00 00 00 00` |
+| IP | DHCP |
+
+## Variants
+
+One firmware image contains both variants. Which one runs is decided at reset
+from a persistent boot-state record in flash (last 128 KiB sector).
+
+| Variant | DID `F100` | Selected when |
+|---------|-----------|---------------|
+| Boot (`FLXC1000_Boot`) | `FF 00 00` | boot state = `boot_requested`, or button **B** held during reset |
+| App (`FLXC1000_App`) | `00 01 01` | boot state = `app_valid` or no record (factory default) |
+
+Transitions:
+
+- App `11 01` (HardReset) → writes `boot_requested`, resets → Boot.
+- Boot `37` (RequestTransferExit) after a completed download → writes
+  `app_valid`. The next `11 01` resets → App.
+- Boot `11 03` (SoftReset) → resets, stays in Boot.
+
+## Sessions
+
+| ID | Name | App | Boot |
+|----|------|-----|------|
+| `01` | Default | ✓ | ✓ |
+| `02` | Programming | – | ✓ |
+| `03` | Extended | ✓ | ✓ |
+
+Session timing (P2 / P2*) uses ace-server defaults: P2 = 50 ms, P2* = 5000 ms.
+S3 = 5000 ms.
+
+## Services
+
+| SID | Service | App sessions | Boot sessions | Notes |
+|-----|---------|-------------|--------------|-------|
+| `10` | DiagnosticSessionControl | 01, 03 | 01, 02, 03 | sub-functions = session IDs |
+| `11` | ECUReset | 01, 03 | 01, 02, 03 | App: `01` HardReset. Boot: `01` HardReset, `03` SoftReset |
+| `14` | ClearDiagnosticInformation | 01, 03 | – | group `FF FF FF` (any group clears all) |
+| `19` | ReadDTCInformation | 01, 03 | – | only sub-function `02` reportDTCByStatusMask |
+| `22` | ReadDataByIdentifier | 01, 03 | 01, 02, 03 | one DID per request |
+| `27` | SecurityAccess | – | 02, 03 | level `03` (seed) / `04` (key) |
+| `2E` | WriteDataByIdentifier | 03 | – | |
+| `31` | RoutineControl | 03 | – | |
+| `34` | RequestDownload | – | 02 + security `03` | |
+| `36` | TransferData | – | 02 + security `03` | |
+| `37` | RequestTransferExit | – | 02 + security `03` | |
+| `3E` | TesterPresent | 01, 03 | 01, 02, 03 | sub-function `00` |
+
+### SecurityAccess (Boot)
+
+- `27 03` → `67 03 <seed:4>`
+- `27 04 <key:4>` with `key = seed XOR 0xDEADBEEF` → `67 04`
+- 3 failed attempts → 10 s lockout (NRC `36` / `37`)
+
+### Download (Boot)
+
+- `34 00 44 <addr:4> <size:4>` → `74 20 0F FF` (maxNumberOfBlockLength = 4095)
+- `36 <bsc> <data...>` → `76 <bsc>`. Data is counted and discarded (no real
+  flashing; the AZ3166 keeps running the same image).
+- `37` → `77`, marks the App as valid.
+
+## Data identifiers
+
+### Common (App and Boot)
+
+| DID | Name | Len | Type / scaling | Access |
+|-----|------|-----|----------------|--------|
+| `F100` | VariantIdentification | 3 | raw bytes (`00 01 01` App, `FF 00 00` Boot) | R |
+| `F186` | ActiveDiagnosticSession | 1 | uint8, session ID | R |
+| `F18C` | EcuSerialNumber | 12 | STM32 96-bit unique device ID, raw bytes | R |
+| `F195` | SoftwareVersion | 8 | ASCII, space-padded (e.g. `0.1.0   `) | R |
+
+### App only
+
+| DID | Name | Len | Type / scaling | Unit | Access |
+|-----|------|-----|----------------|------|--------|
+| `F190` | VIN | 17 | ASCII | – | R; W in session 03 |
+| `F200` | FluxCapacitorPowerConsumption | 4 | sint32, factor 1 (default 1210) | MW | R (pulses LED1 while read) |
+| `F201` | AmbientTemperature | 2 | sint16, physical = raw × 0.1 | °C | R (HTS221) |
+| `F202` | RelativeHumidity | 2 | uint16, physical = raw × 0.1 | %RH | R (HTS221) |
+| `F203` | AtmosphericPressure | 2 | uint16, physical = raw × 0.1 | hPa | R (LPS22HB) |
+| `F204` | Acceleration | 6 | 3 × sint16 (X, Y, Z), factor 1 | mg | R (LSM6DSL) |
+| `F205` | AngularRate | 6 | 3 × sint16 (X, Y, Z), physical = raw × 0.1 | dps | R (LSM6DSL) |
+| `F206` | MagneticField | 6 | 3 × sint16 (X, Y, Z), factor 1 | mG | R (LIS2MDL) |
+| `F210` | ButtonState | 1 | bitfield: bit 0 = button A pressed, bit 1 = button B pressed | – | R |
+| `F211` | RgbLedColor | 3 | 3 × uint8 (R, G, B), 0–255 | – | R; W in session 03 |
+| `F212` | DisplayText | 16 | ASCII, space-padded, shown on OLED line 3 | – | R; W in session 03 |
+| `F220` | IpAddress | 4 | 4 × uint8 (dotted quad) | – | R |
+| `F221` | MacAddress | 6 | 6 × uint8 | – | R |
+| `F230` | OperatingTime | 4 | uint32, seconds since reset | s | R |
+
+Sensor DIDs return NRC `22` (conditionsNotCorrect) if the sensor failed to
+initialise.
+
+## Routines (App, session 03)
+
+| RID | Name | Start `01` | Stop `02` | Results `03` |
+|-----|------|-----------|-----------|--------------|
+| `1001` | SelfTest | runs LED cascade (~1.5 s); `71 01 10 01 01` | aborts; `71 02 10 01 03` | `71 03 10 01 <status>` |
+
+Routine status byte: `00` idle, `01` running, `02` completed, `03` aborted.
+Start while running → NRC `24`. Stop while not running → NRC `24`.
+
+LED cascade order (LED bar 1–5): User LED, Azure LED, RGB red, RGB green, RGB
+blue. The Wi-Fi LED shows network state and is not part of the bar.
+
+## DTCs (App)
+
+`19 02 <mask>` → `59 02 FF [<dtc:3> <status:1>]...` (availability mask `FF`).
+
+| DTC | Name | Initial status | Set by |
+|-----|------|----------------|--------|
+| `01E240` | FluxCapacitorOverload (simulated) | `2F` | always present at boot |
+| `039447` | TemporalDisplacementCircuit (simulated) | `24` | always present at boot |
+| `C10100` | HumidityTemperatureSensorNoResponse | `09` | HTS221 init failed |
+| `C10200` | PressureSensorNoResponse | `09` | LPS22HB init failed |
+| `C10300` | InertialSensorNoResponse | `09` | LSM6DSL init failed |
+| `C10400` | MagnetometerNoResponse | `09` | LIS2MDL init failed |
+
+`14 FF FF FF` clears all DTCs (they are not re-set until the next reset).
+
+## Negative response codes used
+
+`11` serviceNotSupported, `12` subFunctionNotSupported, `13`
+incorrectMessageLengthOrInvalidFormat, `22` conditionsNotCorrect, `24`
+requestSequenceError, `31` requestOutOfRange, `33` securityAccessDenied, `35`
+invalidKey, `36` exceededNumberOfAttempts, `37` requiredTimeDelayNotExpired,
+`7E` subFunctionNotSupportedInActiveSession, `7F`
+serviceNotSupportedInActiveSession.
