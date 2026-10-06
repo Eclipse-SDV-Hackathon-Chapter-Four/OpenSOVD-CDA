@@ -2,14 +2,19 @@
  * SPDX-License-Identifier: Apache-2.0
  * This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
  *
- * FLXC1000 on the MXCHIP AZ3166: startup, threads and the UDS worker.
+ * AZ3166 ECU: startup, threads and the UDS worker. Built twice:
+ *
+ *   FW_IMAGE_BOOT  bootloader at 0x08000000: picks and starts an app slot,
+ *                  otherwise runs the Boot variant (DoIP programming)
+ *   FW_IMAGE_APP   app linked for slot FW_SLOT ('A' or 'B'): App variant;
+ *                  confirms its slot once DoIP is up
  *
  * Threads (priority, stack):
  *   uds      (4, 20 KiB) ECU init, network bring-up, then runs every UDS
  *                        request (the only thread touching the ECU)
- *   tcp0/1   (6,  3 KiB) DoIP TCP connections (flxc1000_tcp_task)
- *   udp      (6,  2 KiB) DoIP vehicle identification (flxc1000_udp_task)
- *   routine  (8,  2 KiB) LED self-test, display (flxc1000_routine_task)
+ *   tcp0/1   (6,  3 KiB) DoIP TCP connections (az3166_tcp_task)
+ *   udp      (6,  2 KiB) DoIP vehicle identification (az3166_udp_task)
+ *   routine  (8,  2 KiB) LED self-test, display (az3166_routine_task)
  */
 
 #include <stdio.h>
@@ -18,10 +23,19 @@
 
 #include "board.h"
 #include "boot_state.h"
+#include "bootloader.h"
+#include "image_info.h"
 #include "net.h"
 #include "platform.h"
 
 void syscalls_rtos_init(void);
+
+#if !defined(FW_IMAGE_BOOT) && !defined(FW_IMAGE_APP)
+#error "define FW_IMAGE_BOOT or FW_IMAGE_APP"
+#endif
+#ifndef FW_VERSION
+#define FW_VERSION "0.0.0"
+#endif
 
 #ifndef WIFI_SSID
 #define WIFI_SSID ""
@@ -41,6 +55,12 @@ void syscalls_rtos_init(void);
 
 #define UDS_TICK_MS 100
 
+/* An app on trial must come up (DoIP listening) within this time, else it
+ * resets and the bootloader counts a failed attempt. */
+#define TRIAL_DEADLINE_S 120
+
+extern uint32_t g_pfnVectors[];
+
 static TX_THREAD uds_thread;
 static TX_THREAD tcp_threads[PLAT_TCP_SLOTS];
 static TX_THREAD udp_thread;
@@ -52,6 +72,71 @@ static ULONG udp_stack[UDP_STACK_SIZE / sizeof(ULONG)];
 static ULONG routine_stack[ROUTINE_STACK_SIZE / sizeof(ULONG)];
 
 static uint32_t boot_state;
+
+#ifdef FW_IMAGE_APP
+/* Checked by the bootloader before it starts the slot. */
+__attribute__((section(".image_info"), used)) static const image_info_t image_info = {
+    .magic     = IMAGE_INFO_MAGIC,
+    .link_base = (uint32_t)g_pfnVectors,
+    .version   = FW_VERSION,
+};
+
+static TX_TIMER trial_timer;
+static volatile int confirmed;
+
+static uint8_t own_slot(void)
+{
+    return slot_of_address((uint32_t)g_pfnVectors);
+}
+
+static int on_trial(void)
+{
+    boot_state_t state;
+    boot_state_get(&state);
+    return state.trial == own_slot();
+}
+
+static void trial_deadline(ULONG parameter)
+{
+    (void)parameter;
+    if (!confirmed)
+    {
+        printf("Trial: not up within %d s, resetting\r\n", TRIAL_DEADLINE_S);
+        NVIC_SystemReset();
+    }
+}
+
+/* The app is up: keep this slot. */
+static void confirm_slot(void)
+{
+    if (on_trial())
+    {
+        if (boot_state_append(REC_CONFIRMED, own_slot()) == 0)
+        {
+            printf("Trial: slot %c confirmed\r\n", 'A' + own_slot());
+        }
+    }
+    confirmed = 1;
+}
+#endif
+
+void plat_version(uint8_t out[16])
+{
+    static const char version[16] = FW_VERSION;
+    for (int i = 0; i < 16; i++)
+    {
+        out[i] = (uint8_t)version[i];
+    }
+}
+
+uint8_t plat_running_slot(void)
+{
+#ifdef FW_IMAGE_APP
+    return (uint8_t)('A' + own_slot());
+#else
+    return 'L';
+#endif
+}
 
 /* ---- UDS worker ------------------------------------------------------------
  * DoIP threads post a pointer to a request on stack and wait on its
@@ -87,7 +172,7 @@ static void uds_thread_entry(ULONG parameter)
 {
     (void)parameter;
 
-    flxc1000_init(boot_state);
+    az3166_init(boot_state);
     tx_thread_resume(&routine_thread);
 
     if (net_init(WIFI_SSID, WIFI_PASSWORD) == 0)
@@ -97,6 +182,9 @@ static void uds_thread_entry(ULONG parameter)
             tx_thread_resume(&tcp_threads[i]);
         }
         tx_thread_resume(&udp_thread);
+#ifdef FW_IMAGE_APP
+        confirm_slot();
+#endif
     }
 
     for (;;)
@@ -104,28 +192,28 @@ static void uds_thread_entry(ULONG parameter)
         uds_job_t* job;
         if (tx_queue_receive(&uds_queue, &job, UDS_TICK_MS * TX_TIMER_TICKS_PER_SECOND / 1000) == TX_SUCCESS)
         {
-            job->result = flxc1000_uds_execute(job->source, job->req, job->len, job->resp, job->cap);
+            job->result = az3166_uds_execute(job->source, job->req, job->len, job->resp, job->cap);
             tx_semaphore_put(&job->done);
         }
-        flxc1000_uds_tick();
+        az3166_uds_tick();
     }
 }
 
 static void tcp_thread_entry(ULONG slot)
 {
-    flxc1000_tcp_task(slot);
+    az3166_tcp_task(slot);
 }
 
 static void udp_thread_entry(ULONG parameter)
 {
     (void)parameter;
-    flxc1000_udp_task();
+    az3166_udp_task();
 }
 
 static void routine_thread_entry(ULONG parameter)
 {
     (void)parameter;
-    flxc1000_routine_task();
+    az3166_routine_task();
 }
 
 void tx_application_define(void* first_unused_memory)
@@ -149,28 +237,46 @@ void tx_application_define(void* first_unused_memory)
         NET_PRIORITY, TX_NO_TIME_SLICE, TX_DONT_START);
     tx_thread_create(&routine_thread, "routine", routine_thread_entry, 0, routine_stack, sizeof(routine_stack),
         ROUTINE_PRIORITY, ROUTINE_PRIORITY, TX_NO_TIME_SLICE, TX_DONT_START);
+
+#ifdef FW_IMAGE_APP
+    if (on_trial())
+    {
+        printf("Trial: slot %c must come up within %d s\r\n", 'A' + own_slot(), TRIAL_DEADLINE_S);
+        tx_timer_create(&trial_timer, "trial", trial_deadline, 0, TRIAL_DEADLINE_S * TX_TIMER_TICKS_PER_SECOND, 0,
+            TX_AUTO_ACTIVATE);
+    }
+#endif
 }
 
-/* Boot variant if requested by the App (ECUReset) or if button B is held
- * during reset; otherwise the App (also when no state was ever stored). */
-static uint32_t select_boot_state(void)
-{
-    if (BUTTON_B_IS_PRESSED)
-    {
-        printf("Button B held: starting Boot variant\r\n");
-        return PLAT_BOOT_STATE_BOOT_REQUESTED;
-    }
-    if (boot_state_read() == PLAT_BOOT_STATE_BOOT_REQUESTED)
-    {
-        return PLAT_BOOT_STATE_BOOT_REQUESTED;
-    }
-    return PLAT_BOOT_STATE_APP_VALID;
-}
-
+#ifdef FW_IMAGE_BOOT
 int main(void)
 {
+    /* Before any clock setup: a started app must begin from reset state. */
+    bootloader_select();
+
     board_init();
-    boot_state = select_boot_state();
+    printf("Bootloader %s: Boot variant\r\n", FW_VERSION);
+    boot_state = PLAT_BOOT_STATE_BOOT_REQUESTED;
     tx_kernel_enter();
     return 0;
 }
+#else
+int main(void)
+{
+    /* SystemInit pointed the vector table at the bootloader. */
+    SCB->VTOR = (uint32_t)g_pfnVectors;
+
+    board_init();
+    printf("App %s in slot %c\r\n", FW_VERSION, plat_running_slot());
+#ifdef APP_TEST_HANG
+    /* Test build: a broken app that never comes up (rollback test). */
+    printf("APP_TEST_HANG: hanging\r\n");
+    for (;;)
+    {
+    }
+#endif
+    boot_state = PLAT_BOOT_STATE_APP_VALID;
+    tx_kernel_enter();
+    return 0;
+}
+#endif
