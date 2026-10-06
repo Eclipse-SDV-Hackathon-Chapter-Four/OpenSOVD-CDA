@@ -19,7 +19,15 @@ struct BoardState {
     boot_state: Option<BootState>,
     broken: Vec<Sensor>,
     buttons: u8,
+    /// Simulated app slots: (base, contents); the update target is slot B.
+    flash: Vec<(u32, Vec<u8>)>,
+    erased: Option<u32>,
+    committed: Option<u32>,
 }
+
+const SLOT_A: u32 = 0x0806_0000;
+const SLOT_B: u32 = 0x080A_0000;
+const SLOT_SIZE: usize = 0x4_0000;
 
 #[derive(Clone, Default)]
 struct FakeBoard(Arc<Mutex<BoardState>>);
@@ -85,6 +93,43 @@ impl Board for FakeBoard {
     }
     fn write_boot_state(&self, state: BootState) -> Result<(), FlashError> {
         self.state().boot_state = Some(state);
+        Ok(())
+    }
+    fn software_version(&self) -> [u8; 16] {
+        *b"0.1.0\0\0\0\0\0\0\0\0\0\0\0"
+    }
+    fn update_begin(&self) -> Option<u32> {
+        let mut s = self.state();
+        s.flash = vec![
+            (SLOT_A, vec![0xFF; SLOT_SIZE]),
+            (SLOT_B, vec![0xFF; SLOT_SIZE]),
+        ];
+        s.erased = Some(SLOT_B);
+        Some(SLOT_B)
+    }
+    fn flash_program(&self, address: u32, data: &[u8]) -> Result<(), FlashError> {
+        let mut s = self.state();
+        let target = s.erased.ok_or(FlashError)?;
+        let slot = s
+            .flash
+            .iter_mut()
+            .find(|(b, _)| *b == target)
+            .ok_or(FlashError)?;
+        let offset = address.checked_sub(target).ok_or(FlashError)? as usize;
+        let cells = slot
+            .1
+            .get_mut(offset..offset + data.len())
+            .ok_or(FlashError)?;
+        if cells.iter().any(|c| *c != 0xFF) {
+            return Err(FlashError); // not erased
+        }
+        cells.copy_from_slice(data);
+        Ok(())
+    }
+    fn update_commit(&self, base: u32) -> Result<(), FlashError> {
+        let mut s = self.state();
+        s.committed = Some(base);
+        s.boot_state = Some(BootState::AppValid);
         Ok(())
     }
 }
@@ -171,7 +216,7 @@ fn app_board_state_dids() {
         &[0xC8, 0x93, 0x46, 1, 2, 3]
     );
     assert_eq!(&h.req(&[0x22, 0xF2, 0x30])[3..], &42u32.to_be_bytes());
-    assert_eq!(&h.req(&[0x22, 0xF2, 0x00])[3..], &1210i32.to_be_bytes());
+    assert_eq!(h.req(&[0x22, 0xF2, 0x00]), [0x7F, 0x22, 0x31]);
 }
 
 #[test]
@@ -181,10 +226,7 @@ fn broken_sensor_gives_nrc_and_dtc() {
     let mut h = Harness::with_board(BootState::AppValid, board);
     assert_eq!(h.req(&[0x22, 0xF2, 0x03]), [0x7F, 0x22, 0x22]);
     let dtcs = h.req(&[0x19, 0x02, 0x08]);
-    assert_eq!(
-        dtcs,
-        [0x59, 0x02, 0xFF, 0x01, 0xE2, 0x40, 0x2F, 0xC1, 0x02, 0x00, 0x09]
-    );
+    assert_eq!(dtcs, [0x59, 0x02, 0xFF, 0xC1, 0x02, 0x00, 0x09]);
 }
 
 #[test]
@@ -259,8 +301,19 @@ fn self_test_abort() {
 }
 
 #[test]
-fn clear_dtcs() {
+fn healthy_board_has_no_dtcs() {
     let mut h = Harness::new(BootState::AppValid);
+    assert_eq!(h.req(&[0x19, 0x02, 0xFF]), [0x59, 0x02, 0xFF]);
+}
+
+#[test]
+fn clear_dtcs() {
+    let board = FakeBoard::default();
+    board
+        .state()
+        .broken
+        .extend([Sensor::Pressure, Sensor::Magnetometer]);
+    let mut h = Harness::with_board(BootState::AppValid, board);
     assert_eq!(h.req(&[0x19, 0x02, 0xFF]).len(), 3 + 2 * 4);
     assert_eq!(h.req(&[0x14, 0xFF, 0xFF, 0xFF]), [0x54]);
     assert_eq!(h.req(&[0x19, 0x02, 0xFF]), [0x59, 0x02, 0xFF]);
@@ -309,24 +362,137 @@ fn boot_identification() {
     );
 }
 
+fn request_download(size: usize) -> Vec<u8> {
+    let mut req = vec![0x34, 0x00, 0x44];
+    req.extend_from_slice(&update::APP_REGION.to_be_bytes());
+    req.extend_from_slice(&(size as u32).to_be_bytes());
+    req
+}
+
+/// Sends `package` in TransferData blocks of `block` data bytes.
+fn transfer(h: &mut Harness, package: &[u8], block: usize) {
+    for (i, chunk) in package.chunks(block).enumerate() {
+        let bsc = (i + 1) as u8; // wraps 0xFF -> 0x00
+        let mut req = vec![0x36, bsc];
+        req.extend_from_slice(chunk);
+        assert_eq!(h.req(&req), [0x76, bsc]);
+    }
+}
+
+fn images() -> (Vec<u8>, Vec<u8>) {
+    let a: Vec<u8> = (0..5000u32).map(|i| (i * 7) as u8).collect();
+    let b: Vec<u8> = (0..5001u32).map(|i| (i * 13 + 1) as u8).collect();
+    (a, b)
+}
+
 #[test]
-fn boot_download_marks_app_valid() {
+fn boot_download_writes_target_slot_and_commits() {
     let mut h = Harness::new(BootState::BootRequested);
+    let (a, b) = images();
+    let package = update::build_package("0.2.0", &[(SLOT_A, &a), (SLOT_B, &b)]);
+
     // Download needs security
     h.req(&[0x10, 0x02]);
-    assert_eq!(
-        h.req(&[0x34, 0x00, 0x44, 0, 0, 0, 0, 0, 0, 0x10, 0]),
-        [0x7F, 0x34, 0x33]
-    );
+    assert_eq!(h.req(&request_download(package.len())), [0x7F, 0x34, 0x33]);
 
     unlock(&mut h);
     assert_eq!(
-        h.req(&[0x34, 0x00, 0x44, 0, 0, 0, 0, 0, 0, 0x10, 0]),
+        h.req(&request_download(package.len())),
         [0x74, 0x20, 0x0F, 0xFF]
     );
-    assert_eq!(h.req(&[0x36, 0x01, 0xAA, 0xBB]), [0x76, 0x01]);
+    transfer(&mut h, &package, 1000);
     assert_eq!(h.req(&[0x37]), [0x77]);
-    assert_eq!(h.board.state().boot_state, Some(BootState::AppValid));
+
+    let state = h.board.state();
+    assert_eq!(state.committed, Some(SLOT_B));
+    assert_eq!(state.boot_state, Some(BootState::AppValid));
+    let slot_b = &state
+        .flash
+        .iter()
+        .find(|(base, _)| *base == SLOT_B)
+        .unwrap()
+        .1;
+    assert_eq!(&slot_b[..b.len()], &b[..]);
+    assert!(slot_b[b.len()..].iter().all(|c| *c == 0xFF));
+}
+
+#[test]
+fn boot_download_tolerates_repeated_block() {
+    let mut h = Harness::new(BootState::BootRequested);
+    let (a, b) = images();
+    let package = update::build_package("0.2.0", &[(SLOT_A, &a), (SLOT_B, &b)]);
+    h.req(&[0x10, 0x02]);
+    unlock(&mut h);
+    h.req(&request_download(package.len()));
+
+    let (first, rest) = package.split_at(4000);
+    let mut block1 = vec![0x36, 0x01];
+    block1.extend_from_slice(first);
+    assert_eq!(h.req(&block1), [0x76, 0x01]);
+    assert_eq!(h.req(&block1), [0x76, 0x01]); // retry: acknowledged, not rewritten
+    let mut block3 = vec![0x36, 0x03];
+    block3.extend_from_slice(&rest[..10]);
+    assert_eq!(h.req(&block3), [0x7F, 0x36, 0x73]);
+    for (i, chunk) in rest.chunks(4000).enumerate() {
+        let bsc = (i + 2) as u8;
+        let mut req = vec![0x36, bsc];
+        req.extend_from_slice(chunk);
+        assert_eq!(h.req(&req), [0x76, bsc]);
+    }
+    assert_eq!(h.req(&[0x37]), [0x77]);
+}
+
+#[test]
+fn boot_download_rejects_corrupt_image() {
+    let mut h = Harness::new(BootState::BootRequested);
+    let (a, b) = images();
+    let mut package = update::build_package("0.2.0", &[(SLOT_A, &a), (SLOT_B, &b)]);
+    let last = package.len() - 1;
+    package[last] ^= 0xFF; // inside the slot B image
+    h.req(&[0x10, 0x02]);
+    unlock(&mut h);
+    h.req(&request_download(package.len()));
+    transfer(&mut h, &package, 1000);
+    assert_eq!(h.req(&[0x37]), [0x7F, 0x37, 0x72]);
+    assert_eq!(h.board.state().committed, None);
+}
+
+#[test]
+fn boot_download_rejects_package_without_image_for_slot() {
+    let mut h = Harness::new(BootState::BootRequested);
+    let (a, _) = images();
+    let package = update::build_package("0.2.0", &[(SLOT_A, &a)]);
+    h.req(&[0x10, 0x02]);
+    unlock(&mut h);
+    h.req(&request_download(package.len()));
+    let mut req = vec![0x36, 0x01];
+    req.extend_from_slice(&package[..200]);
+    assert_eq!(h.req(&req), [0x7F, 0x36, 0x31]);
+    assert_eq!(h.req(&[0x37]), [0x7F, 0x37, 0x72]);
+}
+
+#[test]
+fn boot_download_rejects_wrong_address_and_size() {
+    let mut h = Harness::new(BootState::BootRequested);
+    h.req(&[0x10, 0x02]);
+    unlock(&mut h);
+    assert_eq!(
+        h.req(&[0x34, 0x00, 0x44, 0, 0, 0, 0, 0, 0, 0x10, 0]),
+        [0x7F, 0x34, 0x31]
+    );
+    assert_eq!(h.req(&request_download(10)), [0x7F, 0x34, 0x31]);
+    assert_eq!(h.req(&[0x37]), [0x7F, 0x37, 0x24]);
+}
+
+#[test]
+fn display_reads_match_uds_reads() {
+    let mut h = Harness::new(BootState::AppValid);
+    for did in [0xF190u16, 0xF201, 0xF211, 0xF212, 0xF195] {
+        let mut buf = [0u8; 64];
+        let n = crate::read_did(true, &h.board, h.shared, did, &mut buf).unwrap();
+        let resp = h.req(&[0x22, (did >> 8) as u8, did as u8]);
+        assert_eq!(&resp[3..], &buf[..n], "DID {did:04X}");
+    }
 }
 
 #[test]
