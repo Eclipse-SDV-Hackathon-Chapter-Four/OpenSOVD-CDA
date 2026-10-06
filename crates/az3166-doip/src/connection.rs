@@ -37,6 +37,12 @@ pub trait UdsHandler {
     /// Handles `request` and writes the UDS response into `response`.
     /// Returns the response length; 0 means no response (e.g. suppressed).
     fn handle(&mut self, source: u16, target: u16, request: &[u8], response: &mut [u8]) -> usize;
+
+    /// True if handling `request` takes long enough (e.g. a flash erase) that
+    /// a `7F <SID> 78` responsePending must be sent first.
+    fn response_pending(&self, _request: &[u8]) -> bool {
+        false
+    }
 }
 
 /// The transport could not send a frame (peer gone, out of buffers).
@@ -242,6 +248,20 @@ impl Connection {
         };
         self.send(|out| ack.encode(out), transport)?;
 
+        let request = &self.rx[DoipHeader::SIZE + 4..];
+        if !request.is_empty() && uds.response_pending(request) {
+            let pending = [0x7F, request[0], 0x78];
+            let msg = DiagnosticMessage {
+                source_address: self.ecu_address,
+                target_address: source,
+                user_data: &pending,
+            };
+            let len = msg.encode(&mut self.tx).expect("fits");
+            transport
+                .send(&self.tx[..len])
+                .map_err(|SendError| Error::Send)?;
+        }
+
         // The UDS response is written straight into the transmit buffer behind
         // the space reserved for the DoIP header and addresses.
         let request = &self.rx[DoipHeader::SIZE + 4..];
@@ -407,6 +427,32 @@ mod tests {
                 tester_address: 0x0E00
             }
         );
+    }
+
+    struct Slow;
+    impl UdsHandler for Slow {
+        fn handle(&mut self, _s: u16, _t: u16, _req: &[u8], resp: &mut [u8]) -> usize {
+            resp[..4].copy_from_slice(&[0x74, 0x20, 0x0F, 0xFF]);
+            4
+        }
+        fn response_pending(&self, request: &[u8]) -> bool {
+            request[0] == 0x34
+        }
+    }
+
+    #[test]
+    fn slow_request_gets_response_pending_first() {
+        let (mut c, mut sink) = (conn(), Sink::default());
+        c.on_data(&hex(RA), &mut Slow, &mut sink).unwrap();
+        c.on_data(
+            &hex("02FD 8001 00000007 0E00 1000 34 00 44"),
+            &mut Slow,
+            &mut sink,
+        )
+        .unwrap();
+        assert_eq!(sink.0[1], hex("02FD 8002 00000005 1000 0E00 00"));
+        assert_eq!(sink.0[2], hex("02FD 8001 00000007 1000 0E00 7F3478"));
+        assert_eq!(sink.0[3], hex("02FD 8001 00000008 1000 0E00 74200FFF"));
     }
 
     #[test]
