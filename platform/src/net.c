@@ -71,11 +71,6 @@ static ULONG ms_to_ticks(uint32_t ms)
     return (ms * TX_TIMER_TICKS_PER_SECOND + 999u) / 1000u;
 }
 
-static void show_status(const char* text)
-{
-    plat_display_line(1, (const uint8_t*)text, (uint32_t)strlen(text));
-}
-
 static UINT wifi_init(void)
 {
     wiced_mac_t mac;
@@ -108,7 +103,6 @@ static void wifi_join(const char* ssid, const char* password)
     for (int attempt = 1;; attempt++)
     {
         printf("Joining '%s' (attempt %d)\r\n", ssid, attempt);
-        show_status("WiFi joining...");
 
         /* Hold the IP mutex while (re)joining, as the WICED driver expects. */
         tx_mutex_get(&nx_ip.nx_ip_protection, TX_WAIT_FOREVER);
@@ -131,7 +125,6 @@ static UINT dhcp_wait(void)
     ULONG mask;
     char text[20];
 
-    show_status("DHCP...");
     while (nx_ip_status_check(&nx_ip, NX_IP_ADDRESS_RESOLVED, &actual_status, DHCP_WAIT_TICKS) != NX_SUCCESS)
     {
         printf("Waiting for DHCP\r\n");
@@ -142,7 +135,6 @@ static UINT dhcp_wait(void)
     snprintf(text, sizeof(text), "%lu.%lu.%lu.%lu",
         address >> 24, (address >> 16) & 0xFF, (address >> 8) & 0xFF, address & 0xFF);
     printf("IP address %s\r\n", text);
-    show_status(text);
     ip_address = address;
     WIFI_LED_ON();
     return NX_SUCCESS;
@@ -181,7 +173,6 @@ UINT net_init(const char* ssid, const char* password)
     if (ssid[0] == '\0')
     {
         printf("ERROR: no Wi-Fi SSID configured (see README)\r\n");
-        show_status("No WiFi config");
         return NX_NOT_SUCCESSFUL;
     }
 
@@ -196,10 +187,8 @@ UINT net_init(const char* ssid, const char* password)
         return status;
     }
 
-    show_status("WiFi init...");
     if ((status = wifi_init()))
     {
-        show_status("WiFi init failed");
         return status;
     }
 
@@ -214,7 +203,7 @@ UINT net_init(const char* ssid, const char* password)
 
     wifi_join(ssid, password);
 
-    if ((status = nx_dhcp_create(&nx_dhcp_client, &nx_ip, "flxc1000")) ||
+    if ((status = nx_dhcp_create(&nx_dhcp_client, &nx_ip, "az3166")) ||
         (status = nx_dhcp_start(&nx_dhcp_client)))
     {
         printf("ERROR: DHCP (0x%02x)\r\n", status);

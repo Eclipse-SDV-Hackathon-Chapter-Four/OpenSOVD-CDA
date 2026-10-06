@@ -2,8 +2,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-#ifndef FLXC1000_NET_H
-#define FLXC1000_NET_H
+#ifndef AZ3166_NET_H
+#define AZ3166_NET_H
 
 #include "tx_api.h"
 
