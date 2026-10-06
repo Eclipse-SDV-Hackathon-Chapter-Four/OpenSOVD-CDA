@@ -66,7 +66,7 @@ S3 = 5000 ms.
 | `22` | ReadDataByIdentifier | 01, 03 | 01, 02, 03 | one DID per request |
 | `27` | SecurityAccess | – | 02, 03 | level `03` (seed) / `04` (key) |
 | `2E` | WriteDataByIdentifier | 03 | – | |
-| `31` | RoutineControl | 03 | – | |
+| `31` | RoutineControl | 01, 03 | – | SelfTest in 03 only (else NRC `22`) |
 | `34` | RequestDownload | – | 02 + security `03` | |
 | `36` | TransferData | – | 02 + security `03` | |
 | `37` | RequestTransferExit | – | 02 + security `03` | |
@@ -122,6 +122,7 @@ Tester timing (MDD comparams): `CP_P6Max` 2 s, `CP_P6Star` 8 s (wait after
 | `F210` | ButtonState | 1 | bitfield: bit 0 = button A pressed, bit 1 = button B pressed | – | R |
 | `F211` | RgbLedColor | 3 | 3 × uint8 (R, G, B), 0–255 | – | R; W in session 03 |
 | `F212` | DisplayText | 16 | ASCII, space-padded, shown on OLED line 3 | – | R; W in session 03 |
+| `F213` | AudioVolume | 1 | uint8, 0–100 (0 = mute; DAC gain −50 dB…0 dB) | % | R; W in session 03 |
 | `F220` | IpAddress | 4 | 4 × uint8 (dotted quad) | – | R |
 | `F221` | MacAddress | 6 | 6 × uint8 | – | R |
 | `F230` | OperatingTime | 4 | uint32, seconds since reset | s | R |
@@ -129,11 +130,22 @@ Tester timing (MDD comparams): `CP_P6Max` 2 s, `CP_P6Star` 8 s (wait after
 Sensor DIDs return NRC `22` (conditionsNotCorrect) if the sensor failed to
 initialise.
 
-## Routines (App, session 03)
+## Routines (App)
 
-| RID | Name | Start `01` | Stop `02` | Results `03` |
-|-----|------|-----------|-----------|--------------|
-| `1001` | SelfTest | runs LED cascade (~1.5 s); `71 01 10 01 01` | aborts; `71 02 10 01 03` | `71 03 10 01 <status>` |
+| RID | Name | Sessions | Start `01` | Stop `02` | Results `03` |
+|-----|------|----------|-----------|-----------|--------------|
+| `1001` | SelfTest | 03 | runs LED cascade (~1.5 s); `71 01 10 01 01` | aborts; `71 02 10 01 03` | `71 03 10 01 <status>` |
+| `1003` | VolumeUp | 01, 03 | volume +10 % (max 100); `71 01 10 03 <volume %>` | – | – |
+| `1004` | VolumeDown | 01, 03 | volume −10 % (0 = mute); `71 01 10 04 <volume %>` | – | – |
+| `1002` | AnnounceTemperature | 01, 03 | speaks the ambient temperature on the headphone jack; `71 01 10 02 01` | stops; `71 02 10 02 03` (after the end: `71 02 10 02 <status>`) | `71 03 10 02 <status>` |
+
+VolumeUp and VolumeDown have Start only (the CDA runs them synchronously). The
+volume is 100 % after every reset.
+
+AnnounceTemperature reads the HTS221 temperature, rounded to 0.1 °C, and
+speaks it, e.g. "twenty three point five degrees celsius" or "minus four point
+zero degrees celsius" (about 2–3 s). Without a working temperature sensor or
+audio codec: NRC `22`.
 
 Routine status byte: `00` idle, `01` running, `02` completed, `03` aborted.
 Start while running → NRC `24`. Stop while not running → NRC `24`.
