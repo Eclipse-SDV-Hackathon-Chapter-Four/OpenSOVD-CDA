@@ -21,6 +21,7 @@
 
 #include "tx_api.h"
 
+#include "audio.h"
 #include "board.h"
 #include "boot_state.h"
 #include "bootloader.h"
@@ -268,6 +269,7 @@ int main(void)
 
     board_init();
     printf("App %s in slot %c\r\n", FW_VERSION, plat_running_slot());
+    audio_init();
 #ifdef APP_TEST_HANG
     /* Test build: a broken app that never comes up (rollback test). */
     printf("APP_TEST_HANG: hanging\r\n");
