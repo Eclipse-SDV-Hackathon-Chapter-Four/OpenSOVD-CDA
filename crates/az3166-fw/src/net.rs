@@ -6,6 +6,7 @@
 //! DoIP over NetX Duo: one thread per TCP slot plus the UDP thread.
 
 use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use az3166_doip::connection::INACTIVITY_TIMEOUT_MS;
 use az3166_doip::message::VehicleAnnouncement;
@@ -20,6 +21,14 @@ const BROADCAST: u32 = 0xFFFF_FFFF;
 /// ISO 13400-2: A_DoIP_Announce_Num / A_DoIP_Announce_Interval
 const ANNOUNCE_COUNT: u32 = 3;
 const ANNOUNCE_INTERVAL_MS: u32 = 500;
+
+/// Repeated announcements while no tester is connected over TCP, so a tester
+/// started later finds the ECU without its own (limited) broadcast, which
+/// multi-homed hosts like macOS send out of their primary interface only.
+const REANNOUNCE_INTERVAL_MS: u32 = 5000;
+
+/// Open DoIP TCP connections.
+static CONNECTED: AtomicU32 = AtomicU32::new(0);
 
 const RECV_TIMEOUT_MS: u32 = 1000;
 /// One TCP segment; the connection reassembles frames.
@@ -99,9 +108,11 @@ pub extern "C" fn az3166_tcp_task(slot: u32) -> ! {
             continue;
         }
         log!("DoIP slot {}: tester connected", slot);
+        CONNECTED.fetch_add(1, Ordering::SeqCst);
         connection.reset();
         serve(slot, connection, &mut buf);
         unsafe { sys::plat_tcp_close(slot) };
+        CONNECTED.fetch_sub(1, Ordering::SeqCst);
         log!("DoIP slot {}: closed", slot);
     }
 }
@@ -143,15 +154,30 @@ pub extern "C" fn az3166_udp_task() -> ! {
     let config = DoipConfig::new(ECU_ADDRESS, VIN).with_eid(sys::net_mac());
 
     let mut out = [0u8; VehicleAnnouncement::FRAME_SIZE];
-    if let Some(n) = config.announcement(&mut out) {
-        for _ in 0..ANNOUNCE_COUNT {
-            send_udp(BROADCAST, DOIP_PORT, &out[..n]);
-            sys::sleep_ms(ANNOUNCE_INTERVAL_MS);
+    let mut announcement = [0u8; VehicleAnnouncement::FRAME_SIZE];
+    let announcement_len = config.announcement(&mut announcement).unwrap_or(0);
+    let announce = |frame: &[u8]| {
+        send_udp(BROADCAST, DOIP_PORT, frame);
+        let subnet = unsafe { sys::plat_net_broadcast() };
+        if subnet != BROADCAST {
+            send_udp(subnet, DOIP_PORT, frame);
         }
+    };
+    for _ in 0..ANNOUNCE_COUNT {
+        announce(&announcement[..announcement_len]);
+        sys::sleep_ms(ANNOUNCE_INTERVAL_MS);
     }
 
     let mut buf = [0u8; 256];
+    let mut since_announce_ms = 0;
     loop {
+        if since_announce_ms >= REANNOUNCE_INTERVAL_MS {
+            since_announce_ms = 0;
+            if CONNECTED.load(Ordering::SeqCst) == 0 {
+                announce(&announcement[..announcement_len]);
+            }
+        }
+        let started = sys::uptime_us();
         let (mut ip, mut port) = (0u32, 0u16);
         let n = unsafe {
             sys::plat_udp_recv(
@@ -162,6 +188,7 @@ pub extern "C" fn az3166_udp_task() -> ! {
                 RECV_TIMEOUT_MS,
             )
         };
+        since_announce_ms += ((sys::uptime_us() - started) / 1000) as u32;
         if n <= 0 {
             continue;
         }

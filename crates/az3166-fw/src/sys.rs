@@ -43,13 +43,16 @@ extern "C" {
     pub fn plat_read_lis2mdl(magnetic_mg: *mut [f32; 3]) -> i32;
 
     pub fn plat_boot_state_write(state: u32) -> i32;
+    /// rise, window, fall, hot limit, hot hold time (platform.h)
+    pub fn plat_alarm_config_load(values: *mut [u16; 5]) -> i32;
+    pub fn plat_alarm_config_store(values: *const [u16; 5]) -> i32;
+    pub fn plat_presence_read() -> i32;
 
     pub fn plat_version(out: *mut [u8; 16]);
     pub fn plat_running_slot() -> u8;
     pub fn plat_watchdog_kick();
 
     pub fn plat_audio_ok() -> i32;
-    pub fn plat_audio_free() -> u32;
     pub fn plat_audio_pending() -> u32;
     pub fn plat_audio_write(samples: *const i16, count: u32) -> u32;
     pub fn plat_audio_clear();
@@ -61,6 +64,8 @@ extern "C" {
 
     pub fn plat_net_mac(out: *mut [u8; 6]);
     pub fn plat_net_ip(out: *mut [u8; 4]);
+    pub fn plat_net_broadcast() -> u32;
+    pub fn plat_net_maintain();
 
     pub fn plat_udp_recv(
         buf: *mut u8,

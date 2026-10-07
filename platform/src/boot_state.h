@@ -23,6 +23,13 @@
 #define REC_ATTEMPT   4u /* bootloader started the trial slot */
 #define REC_CONFIRMED 5u /* app in slot came up: slot is good */
 #define REC_REJECTED  6u /* trial failed: rolled back */
+#define REC_CFG_RISE   7u /* app: alarm rise threshold, 0.1 degC */
+#define REC_CFG_WINDOW 8u /* app: alarm time window, s */
+#define REC_CFG_FALL   9u /* app: alarm fall threshold, 0.1 degC */
+#define REC_CFG_HOT    10u /* app: alarm hot limit, 0.1 degC */
+#define REC_CFG_HOLD   11u /* app: alarm hot hold time, s */
+
+#define CFG_UNSET 0xFFFFu
 
 /* Slot status */
 #define SLOT_EMPTY     0u
@@ -37,11 +44,17 @@ typedef struct
     uint8_t trial;       /* slot on trial, or SLOT_NONE */
     uint8_t status[2];
     uint8_t attempts[2]; /* starts of the trial slot so far */
+    uint16_t cfg_rise;   /* app configuration, or CFG_UNSET */
+    uint16_t cfg_window;
+    uint16_t cfg_fall;
+    uint16_t cfg_hot;
+    uint16_t cfg_hold;
 } boot_state_t;
 
 void boot_state_get(boot_state_t* state);
 /* 0 = ok */
-int boot_state_append(uint32_t type, uint8_t slot);
+/* arg: the slot, or a configuration value */
+int boot_state_append(uint32_t type, uint16_t arg);
 /* Slot an update is written to: the one not active. */
 uint8_t boot_state_update_target(void);
 

@@ -1,7 +1,9 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * Wi-Fi (WICED, BCM43362) + NetX Duo IPv4/DHCP + DoIP socket shims.
+ * Wi-Fi (WICED, BCM43362) + NetX Duo IPv4 with a link-local address
+ * (169.254/16, derived from the MAC address, set at once: the vehicle network
+ * has no DHCP server) + DoIP socket shims + the presence sensor client.
  * Network bring-up derived from wwd_networking.c of the Azure RTOS
  * getting-started guides, Copyright (c) Microsoft Corporation.
  */
@@ -12,7 +14,6 @@
 #include <string.h>
 
 #include "nx_api.h"
-#include "nxd_dhcp_client.h"
 #include "wiced_sdk.h"
 
 #include "board.h"
@@ -33,7 +34,20 @@
 #define TCP_LISTEN_QUEUE 2
 #define UDP_QUEUE_MAX    4
 
-#define DHCP_WAIT_TICKS (30 * TX_TIMER_TICKS_PER_SECOND)
+/* Link checks (plat_net_maintain, once a second): rejoin after this many
+ * seconds without a usable link. */
+#define LINK_DOWN_REJOIN_S 3
+
+/* Presence sensor: HTTP GET of its occupancy entity (JSON "value":true/false; the PIR motion sensor). */
+#ifndef PRESENCE_SENSOR_HOST
+#define PRESENCE_SENSOR_HOST "169.254.200.10"
+#endif
+#ifndef PRESENCE_SENSOR_PATH
+#define PRESENCE_SENSOR_PATH "/binary_sensor/PIR"
+#endif
+#define PRESENCE_PORT       80
+#define PRESENCE_TIMEOUT_MS 800
+#define PRESENCE_REPLY_MAX  768
 #define WIFI_COUNTRY    WICED_COUNTRY_WORLD_WIDE_XX
 
 static UCHAR netx_ip_stack[NETX_IP_STACK_SIZE];
@@ -43,10 +57,18 @@ static ULONG netx_arp_cache_area[NETX_ARP_CACHE_SIZE / sizeof(ULONG)];
 
 static NX_IP nx_ip;
 static NX_PACKET_POOL nx_pool[2]; /* 0 = TX, 1 = RX: layout expected by WICED */
-static NX_DHCP nx_dhcp_client;
+static const char* wifi_ssid;
+static const char* wifi_password;
+
+/* In the WICED library, not declared in wiced_sdk.h. */
+extern wwd_result_t wwd_wifi_disable_powersave(void);
+
+static NX_TCP_SOCKET presence_socket;
+static int presence_socket_ready;
 
 static uint8_t mac_address[6];
 static volatile ULONG ip_address;
+static volatile ULONG ip_mask;
 
 static NX_UDP_SOCKET udp_socket;
 
@@ -119,22 +141,24 @@ static void wifi_join(const char* ssid, const char* password)
     }
 }
 
-static UINT dhcp_wait(void)
+/* Link-local address (RFC 3927 range) derived from the MAC address: the same
+ * on every start, so testers can keep it. */
+static UINT address_set(void)
 {
-    ULONG actual_status;
-    ULONG mask;
     char text[20];
-
-    while (nx_ip_status_check(&nx_ip, NX_IP_ADDRESS_RESOLVED, &actual_status, DHCP_WAIT_TICKS) != NX_SUCCESS)
+    ULONG address = IP_ADDRESS(169, 254, 1u + mac_address[4] % 254u, mac_address[5]);
+    ULONG mask    = IP_ADDRESS(255, 255, 0, 0);
+    UINT status   = nx_ip_address_set(&nx_ip, address, mask);
+    if (status != NX_SUCCESS)
     {
-        printf("Waiting for DHCP\r\n");
+        printf("ERROR: address (0x%02x)\r\n", status);
+        return status;
     }
-
-    ULONG address;
-    nx_ip_address_get(&nx_ip, &address, &mask);
+    nx_arp_gratuitous_send(&nx_ip, NX_NULL);
     snprintf(text, sizeof(text), "%lu.%lu.%lu.%lu",
         address >> 24, (address >> 16) & 0xFF, (address >> 8) & 0xFF, address & 0xFF);
-    printf("IP address %s\r\n", text);
+    printf("IP address %s (link-local)\r\n", text);
+    ip_mask    = mask;
     ip_address = address;
     WIFI_LED_ON();
     return NX_SUCCESS;
@@ -201,15 +225,20 @@ UINT net_init(const char* ssid, const char* password)
         return status;
     }
 
+    wifi_ssid     = ssid;
+    wifi_password = password;
     wifi_join(ssid, password);
-
-    if ((status = nx_dhcp_create(&nx_dhcp_client, &nx_ip, "az3166")) ||
-        (status = nx_dhcp_start(&nx_dhcp_client)))
+    /* Power save makes the chip miss traffic for it (seen: associated but
+     * unreachable for many minutes). */
+    if (wwd_wifi_disable_powersave() != WWD_SUCCESS)
     {
-        printf("ERROR: DHCP (0x%02x)\r\n", status);
+        printf("Wi-Fi: could not disable power save\r\n");
+    }
+
+    if ((status = address_set()))
+    {
         return status;
     }
-    dhcp_wait();
 
     if ((status = sockets_init()))
     {
@@ -234,6 +263,40 @@ void plat_net_ip(uint8_t out[4])
     out[1] = (uint8_t)(address >> 16);
     out[2] = (uint8_t)(address >> 8);
     out[3] = (uint8_t)address;
+}
+
+void plat_net_maintain(void)
+{
+    static uint32_t down_s;
+
+    if (wifi_ssid == NULL)
+    {
+        return;
+    }
+    if (wwd_wifi_is_ready_to_transceive(WWD_STA_INTERFACE) == WWD_SUCCESS)
+    {
+        down_s = 0;
+        return;
+    }
+    if (++down_s < LINK_DOWN_REJOIN_S)
+    {
+        return;
+    }
+    printf("Wi-Fi: link lost, rejoining\r\n");
+    WIFI_LED_OFF();
+    wifi_join(wifi_ssid, wifi_password);
+    wwd_wifi_disable_powersave();
+    nx_arp_gratuitous_send(&nx_ip, NX_NULL);
+    WIFI_LED_ON();
+    printf("Wi-Fi: rejoined\r\n");
+    down_s = 0;
+}
+
+uint32_t plat_net_broadcast(void)
+{
+    /* Subnet-directed broadcast: hosts with several interfaces route it
+     * (255.255.255.255 leaves through their primary interface only). */
+    return ip_address == 0 ? 0xFFFFFFFFu : (uint32_t)(ip_address | ~ip_mask);
 }
 
 int32_t plat_udp_recv(uint8_t* buf, uint32_t cap, uint32_t* ip, uint16_t* port, uint32_t timeout_ms)
@@ -393,4 +456,142 @@ void plat_tcp_close(uint32_t slot)
     }
     nx_tcp_socket_disconnect(&s->socket, TX_TIMER_TICKS_PER_SECOND);
     nx_tcp_server_socket_unaccept(&s->socket);
+}
+
+/* ---- presence sensor ----------------------------------------------------- */
+
+static int parse_ipv4(const char* text, ULONG* address)
+{
+    ULONG value = 0;
+    for (int part = 0; part < 4; part++)
+    {
+        ULONG byte = 0;
+        int digits = 0;
+        while (*text >= '0' && *text <= '9' && digits < 3)
+        {
+            byte = byte * 10u + (ULONG)(*text++ - '0');
+            digits++;
+        }
+        if (digits == 0 || byte > 255u || *text != (part < 3 ? '.' : '\0'))
+        {
+            return -1;
+        }
+        text++;
+        value = (value << 8) | byte;
+    }
+    *address = value;
+    return 0;
+}
+
+/* Logs the presence sensor result when it changes (step name + status). */
+static void presence_report(const char* step, UINT status)
+{
+    static const char* last_step;
+    static UINT last_status;
+    if (step != last_step || status != last_status)
+    {
+        printf("Presence sensor: %s (0x%02x)\r\n", step, status);
+        last_step   = step;
+        last_status = status;
+    }
+}
+
+/* One HTTP/1.0 exchange; reply (NUL terminated) in `reply`. 0 = ok. */
+static int presence_http_get(ULONG server, char* reply, ULONG cap)
+{
+    static const char request[] = "GET " PRESENCE_SENSOR_PATH " HTTP/1.0\r\n"
+                                  "Host: " PRESENCE_SENSOR_HOST "\r\n"
+                                  "Connection: close\r\n\r\n";
+    ULONG timeout = ms_to_ticks(PRESENCE_TIMEOUT_MS);
+    ULONG length  = 0;
+    int result    = -1;
+
+    UINT status = nx_tcp_client_socket_bind(&presence_socket, NX_ANY_PORT, timeout);
+    if (status != NX_SUCCESS)
+    {
+        presence_report("bind failed", status);
+        return -1;
+    }
+    status = nx_tcp_client_socket_connect(&presence_socket, server, PRESENCE_PORT, timeout);
+    if (status != NX_SUCCESS)
+    {
+        presence_report("connect failed", status);
+    }
+    else
+    {
+        NX_PACKET* packet = packet_from((const uint8_t*)request, sizeof(request) - 1u, NX_TCP_PACKET);
+        int sent          = 0;
+        if (packet == NX_NULL)
+        {
+            presence_report("no packet", 0);
+        }
+        else if ((status = nx_tcp_socket_send(&presence_socket, packet, timeout)) != NX_SUCCESS)
+        {
+            presence_report("send failed", status);
+            nx_packet_release(packet);
+        }
+        else
+        {
+            /* (the NetX send macro has cleared `packet`: it is NetX's now) */
+            sent = 1;
+        }
+        if (sent)
+        {
+            /* Until the server closes the connection (HTTP/1.0). */
+            while (nx_tcp_socket_receive(&presence_socket, &packet, timeout) == NX_SUCCESS)
+            {
+                ULONG copied = 0;
+                nx_packet_data_extract_offset(packet, 0, reply + length, cap - 1u - length, &copied);
+                length += copied;
+                nx_packet_release(packet);
+            }
+            result = length > 0 ? 0 : -1;
+            presence_report(length > 0 ? "ok" : "empty reply", 0);
+        }
+        nx_tcp_socket_disconnect(&presence_socket, timeout);
+    }
+    nx_tcp_client_socket_unbind(&presence_socket);
+    reply[length] = '\0';
+    return result;
+}
+
+int32_t plat_presence_read(void)
+{
+    static char reply[PRESENCE_REPLY_MAX];
+    ULONG server;
+
+    if (ip_address == 0)
+    {
+        return -1;
+    }
+    if (parse_ipv4(PRESENCE_SENSOR_HOST, &server) != 0)
+    {
+        presence_report("bad address " PRESENCE_SENSOR_HOST, 0);
+        return -1;
+    }
+    if (!presence_socket_ready)
+    {
+        UINT status = nx_tcp_socket_create(&nx_ip, &presence_socket, "presence", NX_IP_NORMAL, NX_FRAGMENT_OKAY,
+            NX_IP_TIME_TO_LIVE, PRESENCE_REPLY_MAX, NX_NULL, NX_NULL);
+        if (status != NX_SUCCESS)
+        {
+            presence_report("socket create failed", status);
+            return -1;
+        }
+        presence_socket_ready = 1;
+    }
+    if (presence_http_get(server, reply, sizeof(reply)) != 0 || strncmp(reply, "HTTP/1.", 7) != 0 ||
+        strstr(reply, " 200 ") == NULL)
+    {
+        return -1;
+    }
+    if (strstr(reply, "\"value\":true") != NULL)
+    {
+        return 1;
+    }
+    if (strstr(reply, "\"value\":false") != NULL)
+    {
+        return 0;
+    }
+    return -1;
 }

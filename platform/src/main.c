@@ -10,13 +10,15 @@
  *                  confirms its slot once DoIP is up
  *
  * Threads (priority, stack):
- *   uds      (4, 20 KiB) ECU init, network bring-up, then runs every UDS
+ *   uds      (4, 28 KiB) ECU init, network bring-up, then runs every UDS
  *                        request (the only thread touching the ECU)
  *   tcp0/1   (6,  3 KiB) DoIP TCP connections (az3166_tcp_task)
  *   udp      (6,  2 KiB) DoIP vehicle identification (az3166_udp_task)
  *   routine  (8,  2 KiB) LED self-test, display (az3166_routine_task)
  *   speech   (9,  4 KiB) App only: text-to-speech into the audio output
  *                        (az3166_speech_task)
+ *   presence (7,  3 KiB) App only: occupancy + temperature alarm, once a
+ *                        second (az3166_presence_task)
  */
 
 #include <stdio.h>
@@ -47,16 +49,18 @@ void syscalls_rtos_init(void);
 #define WIFI_PASSWORD ""
 #endif
 
-#define UDS_STACK_SIZE     (20 * 1024)
+#define UDS_STACK_SIZE     (28 * 1024)
 #define TCP_STACK_SIZE     (3 * 1024)
 #define UDP_STACK_SIZE     (2 * 1024)
 #define ROUTINE_STACK_SIZE (2 * 1024)
 #define SPEECH_STACK_SIZE  (4 * 1024)
+#define PRESENCE_STACK_SIZE (3 * 1024)
 
 #define UDS_PRIORITY     4
 #define NET_PRIORITY     6
 #define ROUTINE_PRIORITY 8
 #define SPEECH_PRIORITY  9
+#define PRESENCE_PRIORITY 7
 
 #define UDS_TICK_MS 100
 
@@ -73,6 +77,8 @@ static TX_THREAD routine_thread;
 #ifdef FW_IMAGE_APP
 static TX_THREAD speech_thread;
 static ULONG speech_stack[SPEECH_STACK_SIZE / sizeof(ULONG)];
+static TX_THREAD presence_thread;
+static ULONG presence_stack[PRESENCE_STACK_SIZE / sizeof(ULONG)];
 #endif
 
 static ULONG uds_stack[UDS_STACK_SIZE / sizeof(ULONG)];
@@ -193,6 +199,7 @@ static void uds_thread_entry(ULONG parameter)
         tx_thread_resume(&udp_thread);
 #ifdef FW_IMAGE_APP
         confirm_slot();
+        tx_thread_resume(&presence_thread);
 #endif
     }
 
@@ -231,6 +238,12 @@ static void speech_thread_entry(ULONG parameter)
     (void)parameter;
     az3166_speech_task();
 }
+
+static void presence_thread_entry(ULONG parameter)
+{
+    (void)parameter;
+    az3166_presence_task();
+}
 #endif
 
 void tx_application_define(void* first_unused_memory)
@@ -260,6 +273,9 @@ void tx_application_define(void* first_unused_memory)
      * routine thread stays above it. */
     tx_thread_create(&speech_thread, "speech", speech_thread_entry, 0, speech_stack, sizeof(speech_stack),
         SPEECH_PRIORITY, SPEECH_PRIORITY, TX_NO_TIME_SLICE, TX_AUTO_START);
+    /* Started by the UDS worker once the network is up. */
+    tx_thread_create(&presence_thread, "presence", presence_thread_entry, 0, presence_stack,
+        sizeof(presence_stack), PRESENCE_PRIORITY, PRESENCE_PRIORITY, TX_NO_TIME_SLICE, TX_DONT_START);
 
     if (on_trial())
     {

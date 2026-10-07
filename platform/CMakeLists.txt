@@ -31,6 +31,8 @@ endif()
 
 set(WIFI_SSID "" CACHE STRING "Wi-Fi SSID")
 set(WIFI_PASSWORD "" CACHE STRING "Wi-Fi WPA2 passphrase (empty = open network)")
+set(PRESENCE_SENSOR_HOST "169.254.200.10" CACHE STRING "Presence sensor IPv4 address (HTTP)")
+set(PRESENCE_SENSOR_PATH "/binary_sensor/PIR" CACHE STRING "Presence sensor occupancy URL path")
 
 # ---- ThreadX and NetX Duo -----------------------------------------------------
 # The configs are the ones the prebuilt WICED library was built with: their
@@ -143,6 +145,8 @@ add_library(platform_common OBJECT
 target_include_directories(platform_common PUBLIC src)
 target_link_libraries(platform_common PUBLIC netxduo threadx wiced_sdk mxchip_bsp stm32hal)
 target_compile_options(platform_common PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror>)
+target_compile_definitions(platform_common PRIVATE
+    "PRESENCE_SENSOR_HOST=\"${PRESENCE_SENSOR_HOST}\"" "PRESENCE_SENSOR_PATH=\"${PRESENCE_SENSOR_PATH}\"")
 
 set(LINKER_DIR "${CMAKE_CURRENT_LIST_DIR}/linker")
 

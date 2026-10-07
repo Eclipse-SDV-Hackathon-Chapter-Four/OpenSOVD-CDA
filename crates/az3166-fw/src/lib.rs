@@ -13,7 +13,8 @@
 //!   and [`az3166_uds_tick`] every 100 ms. Only this thread touches the ECU.
 //! - [`az3166_tcp_task`] per DoIP TCP slot, [`az3166_udp_task`] for
 //!   vehicle identification, [`az3166_routine_task`] for the LED self-test,
-//!   [`az3166_speech_task`] (App only) renders speech to the audio output.
+//!   [`az3166_speech_task`] (App only) renders speech to the audio output,
+//!   [`az3166_presence_task`] (App only) runs the occupancy / temperature alarm.
 
 #![no_std]
 
@@ -21,6 +22,7 @@ mod board;
 #[macro_use]
 mod log;
 mod net;
+mod presence;
 mod screens;
 mod speech;
 mod sys;
@@ -34,9 +36,10 @@ use az3166_ecu::{app, BootState, Ecu, Shared, VIN};
 use board::Az3166;
 
 pub use net::{az3166_tcp_task, az3166_udp_task};
+pub use presence::az3166_presence_task;
 pub use speech::az3166_speech_task;
 
-static SHARED: Shared = Shared::new();
+pub(crate) static SHARED: Shared = Shared::new();
 
 /// The ECU (~11 KiB). Written once by `az3166_init` and afterwards only
 /// used on the UDS worker thread.

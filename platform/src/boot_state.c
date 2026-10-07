@@ -9,7 +9,8 @@
  * stalling the CPU). The state is derived by replaying the log; when the
  * sector is full it is erased and the current state is written back
  * (compaction). Words without the magic (e.g. left by other firmware) are
- * skipped.
+ * skipped. The app also keeps its alarm configuration here (a bootloader
+ * older than these records drops them when it compacts the sector).
  */
 
 #include "boot_state.h"
@@ -81,8 +82,13 @@ const image_info_t* slot_image(uint8_t slot)
 void boot_state_get(boot_state_t* state)
 {
     memset(state, 0, sizeof(*state));
-    state->active = SLOT_NONE;
-    state->trial  = SLOT_NONE;
+    state->active     = SLOT_NONE;
+    state->trial      = SLOT_NONE;
+    state->cfg_rise   = CFG_UNSET;
+    state->cfg_window = CFG_UNSET;
+    state->cfg_fall   = CFG_UNSET;
+    state->cfg_hot    = CFG_UNSET;
+    state->cfg_hold   = CFG_UNSET;
     int any_slot_record = 0;
 
     for (const uint32_t* p = __boot_state_start__; p < __boot_state_end__; p++)
@@ -94,6 +100,13 @@ void boot_state_get(boot_state_t* state)
         }
         uint32_t type = (word >> 16) & 0xFFu;
         uint8_t slot  = (uint8_t)(word & 0xFFFFu);
+        if (type >= REC_CFG_RISE && type <= REC_CFG_HOLD)
+        {
+            uint16_t* cfg[] = {&state->cfg_rise, &state->cfg_window, &state->cfg_fall, &state->cfg_hot,
+                &state->cfg_hold};
+            *cfg[type - REC_CFG_RISE] = (uint16_t)word;
+            continue;
+        }
         if (type >= REC_INSTALLED && slot > SLOT_B)
         {
             continue;
@@ -219,7 +232,7 @@ int flash_erase_sectors(uint32_t first_sector, uint32_t count)
 static int compact(void)
 {
     boot_state_t state;
-    uint32_t records[8];
+    uint32_t records[13];
     uint32_t n = 0;
 
     boot_state_get(&state);
@@ -251,6 +264,26 @@ static int compact(void)
         }
     }
     records[n++] = RECORD(state.run_boot ? REC_RUN_BOOT : REC_RUN_APP, 0);
+    if (state.cfg_rise != CFG_UNSET)
+    {
+        records[n++] = RECORD(REC_CFG_RISE, state.cfg_rise);
+    }
+    if (state.cfg_window != CFG_UNSET)
+    {
+        records[n++] = RECORD(REC_CFG_WINDOW, state.cfg_window);
+    }
+    if (state.cfg_fall != CFG_UNSET)
+    {
+        records[n++] = RECORD(REC_CFG_FALL, state.cfg_fall);
+    }
+    if (state.cfg_hot != CFG_UNSET)
+    {
+        records[n++] = RECORD(REC_CFG_HOT, state.cfg_hot);
+    }
+    if (state.cfg_hold != CFG_UNSET)
+    {
+        records[n++] = RECORD(REC_CFG_HOLD, state.cfg_hold);
+    }
 
     if (flash_erase_sectors(STATE_SECTOR, 1) != 0)
     {
@@ -266,7 +299,7 @@ static int compact(void)
     return 0;
 }
 
-int boot_state_append(uint32_t type, uint8_t slot)
+int boot_state_append(uint32_t type, uint16_t arg)
 {
     int result = -1;
     flash_unlock();
@@ -284,7 +317,7 @@ int boot_state_append(uint32_t type, uint8_t slot)
             goto out;
         }
     }
-    result = program_word(free_word, RECORD(type, slot));
+    result = program_word(free_word, RECORD(type, arg));
 
 out:
     HAL_FLASH_Lock();
@@ -302,4 +335,39 @@ int32_t plat_boot_state_write(uint32_t state)
         return 0;
     }
     return boot_state_append(run_boot ? REC_RUN_BOOT : REC_RUN_APP, 0);
+}
+
+/* Alarm configuration: rise, window, fall, hot limit, hot hold time (in this
+ * order, also the record types REC_CFG_RISE..REC_CFG_HOLD). Load: 1 if the
+ * first three are saved; later ones may be CFG_UNSET (saved by an older app). */
+int32_t plat_alarm_config_load(uint16_t values[PLAT_ALARM_CONFIG_COUNT])
+{
+    boot_state_t state;
+    boot_state_get(&state);
+    if (state.cfg_rise == CFG_UNSET || state.cfg_window == CFG_UNSET || state.cfg_fall == CFG_UNSET)
+    {
+        return 0;
+    }
+    values[0] = state.cfg_rise;
+    values[1] = state.cfg_window;
+    values[2] = state.cfg_fall;
+    values[3] = state.cfg_hot;
+    values[4] = state.cfg_hold;
+    return 1;
+}
+
+int32_t plat_alarm_config_store(const uint16_t values[PLAT_ALARM_CONFIG_COUNT])
+{
+    boot_state_t state;
+    boot_state_get(&state);
+    const uint16_t saved[PLAT_ALARM_CONFIG_COUNT] = {
+        state.cfg_rise, state.cfg_window, state.cfg_fall, state.cfg_hot, state.cfg_hold};
+    for (uint32_t i = 0; i < PLAT_ALARM_CONFIG_COUNT; i++)
+    {
+        if (saved[i] != values[i] && boot_state_append(REC_CFG_RISE + i, values[i]) != 0)
+        {
+            return -1;
+        }
+    }
+    return 0;
 }

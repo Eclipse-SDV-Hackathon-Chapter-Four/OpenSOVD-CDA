@@ -5,7 +5,7 @@
 
 //! `Board` implementation for the MXCHIP AZ3166 on top of the C platform.
 
-use az3166_ecu::board::{Board, BootState, FlashError, Sensor};
+use az3166_ecu::board::{AlarmConfig, Board, BootState, FlashError, Sensor};
 
 use crate::sys;
 
@@ -116,6 +116,25 @@ impl Board for Az3166 {
 
     fn flash_program(&self, address: u32, data: &[u8]) -> Result<(), FlashError> {
         match unsafe { sys::plat_flash_program(address, data.as_ptr(), data.len() as u32) } {
+            0 => Ok(()),
+            _ => Err(FlashError),
+        }
+    }
+
+    fn load_alarm_config(&self) -> Option<AlarmConfig> {
+        let mut v = [0u16; 5];
+        (unsafe { sys::plat_alarm_config_load(&mut v) } == 1).then_some(AlarmConfig {
+            rise: v[0],
+            window_s: v[1],
+            fall: v[2],
+            hot_limit: v[3],
+            hot_hold_s: v[4],
+        })
+    }
+
+    fn store_alarm_config(&self, c: AlarmConfig) -> Result<(), FlashError> {
+        let v = [c.rise, c.window_s, c.fall, c.hot_limit, c.hot_hold_s];
+        match unsafe { sys::plat_alarm_config_store(&v) } {
             0 => Ok(()),
             _ => Err(FlashError),
         }

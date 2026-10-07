@@ -65,6 +65,17 @@ int32_t plat_read_lis2mdl(float magnetic_mg[3]);
 /* 0 = ok */
 int32_t plat_boot_state_write(uint32_t state);
 
+/* Alarm configuration in the state log: rise (0.1 degC), window (s), fall
+ * (0.1 degC), hot limit (0.1 degC), hot hold time (s); 0xFFFF = not saved.
+ * Load: 1 = found. Store: 0 = ok. */
+#define PLAT_ALARM_CONFIG_COUNT 5u
+int32_t plat_alarm_config_load(uint16_t values[PLAT_ALARM_CONFIG_COUNT]);
+int32_t plat_alarm_config_store(const uint16_t values[PLAT_ALARM_CONFIG_COUNT]);
+
+/* Presence sensor over the network (blocks up to ~2 s):
+ * 1 = occupied, 0 = clear, -1 = no answer. */
+int32_t plat_presence_read(void);
+
 /* Firmware identity: version (NUL padded) and the slot running it:
  * 'A' or 'B' for an app, 'L' for the bootloader. */
 void plat_version(uint8_t out[16]);
@@ -98,6 +109,10 @@ int32_t plat_update_commit(uint32_t base);
 void plat_net_mac(uint8_t out[6]);
 /* 0.0.0.0 until DHCP completes */
 void plat_net_ip(uint8_t out[4]);
+/* Once a second: rejoins Wi-Fi when the link is lost (blocks while joining). */
+void plat_net_maintain(void);
+/* Broadcast address of the own subnet (e.g. 169.254.255.255), host order. */
+uint32_t plat_net_broadcast(void);
 
 /* Datagram length, PLAT_TIMEOUT or PLAT_ERROR. ip/port in host order. */
 int32_t plat_udp_recv(uint8_t* buf, uint32_t cap, uint32_t* ip, uint16_t* port, uint32_t timeout_ms);
@@ -125,5 +140,6 @@ void az3166_udp_task(void);
 void az3166_tcp_task(uint32_t slot);
 void az3166_routine_task(void);
 void az3166_speech_task(void);
+void az3166_presence_task(void);
 
 #endif

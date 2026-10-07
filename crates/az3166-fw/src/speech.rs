@@ -84,6 +84,12 @@ pub extern "C" fn az3166_speech_task() -> ! {
 fn speak(speaker: &mut Speaker, samples: &mut [i16; CHUNK], id: u32) {
     let interrupted =
         || REQUESTED.load(Ordering::Acquire) != id || CANCELLED.load(Ordering::Acquire) == id;
+    render(speaker, samples, &interrupted);
+}
+
+/// Renders the prepared text into the audio ring until it ends or
+/// `interrupted` returns true.
+fn render(speaker: &mut Speaker, samples: &mut [i16; CHUNK], interrupted: &dyn Fn() -> bool) {
     let mut pending = 0; // rendered, not yet queued
     loop {
         if interrupted() {
