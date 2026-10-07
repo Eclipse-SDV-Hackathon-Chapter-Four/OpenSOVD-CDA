@@ -37,6 +37,9 @@ test container, which the ODX generator follows.
 The diagnostic surface is specified in [`docs/diagnostics.md`](docs/diagnostics.md);
 the matching ODX/PDX/MDD for the Classic Diagnostic Adapter is in [`odx/`](odx/).
 
+How the AZ3166 is used as a hot-vehicle presence detector together with a
+vehicle, a Wi-Fi gateway and the OpenSOVD CDA: [`docs/architecture.md`](docs/architecture.md).
+
 ## Architecture
 
 ```
