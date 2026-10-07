@@ -151,6 +151,27 @@ def main(pdx: str):
     check("SpeakText_Start", raw.hex() == "31011005" + b"Hello, world.".hex(), raw.hex())
     m = decode(app, "71 03 10 05 02")
     check("SpeakText_RequestResults -> Completed", m.param_dict.get("RoutineStatus") == "Completed")
+    m = decode(app, "62 F2 40 02")
+    check("F240 Sensor Not Available", m.param_dict.get("PresenceState") == "Sensor Not Available", str(m.param_dict))
+    m = decode(app, "62 F2 41 01 00 F5 00 D7 00 1E")
+    check(
+        "F241 Triggered 24.5/21.5/3.0",
+        (m.param_dict["AlarmState"], m.param_dict["CurrentTemperature"], m.param_dict["BaselineTemperature"],
+         m.param_dict["TemperatureRise"]) == ("Triggered", 24.5, 21.5, 3.0),
+        str(m.param_dict),
+    )
+    raw = app.services["AlarmRiseThreshold_Write"].encode_request(AlarmRiseThreshold=1.5)
+    check("F242 write 1.5", raw.hex() == "2ef242000f", raw.hex())
+    raw = app.services["AlarmFallThreshold_Write"].encode_request(AlarmFallThreshold=2.0)
+    check("F244 write 2.0", raw.hex() == "2ef2440014", raw.hex())
+    raw = app.services["AlarmHotLimit_Write"].encode_request(AlarmHotLimit=25.0)
+    check("F245 write 25.0", raw.hex() == "2ef24500fa", raw.hex())
+    raw = app.services["AlarmHotHoldTime_Write"].encode_request(AlarmHotHoldTime=60)
+    check("F246 write 60", raw.hex() == "2ef246003c", raw.hex())
+    raw = app.services["AlarmTimeWindow_Write"].encode_request(AlarmTimeWindow=60)
+    check("F243 write 60", raw.hex() == "2ef243003c", raw.hex())
+    m = decode(app, "71 01 10 06 00")
+    check("ResetDetection_Start -> Armed", m.param_dict.get("AlarmState") == "Armed", str(m.param_dict))
     m = decode(app, "71 03 10 01 02")
     check("SelfTest_RequestResults -> Completed", m.param_dict.get("RoutineStatus") == "Completed")
 

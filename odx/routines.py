@@ -235,3 +235,25 @@ def add_routine_control_services(base: DiagLayerRaw, dlr: DiagLayerRaw):
             description=description,
             sessions=["Default", "Extended"],
         )
+
+    # 31 01 10 06 -> 71 01 10 06 00 (clears the temperature alarm and restarts
+    # its window from the current temperature). Start only: synchronous in
+    # the CDA.
+    alarm_dop = find_dop(dlr, "AlarmState")
+    add_routine(
+        base,
+        dlr,
+        name="ResetDetection",
+        routine_id=0x1006,
+        routine_type="Start",
+        response_params=[
+            ValueParameter(
+                short_name="AlarmState",
+                semantic="DATA",
+                byte_position=4,
+                dop_ref=ref(alarm_dop),
+            )
+        ],
+        description="Reset Detection (temperature alarm)",
+        sessions=["Default", "Extended"],
+    )

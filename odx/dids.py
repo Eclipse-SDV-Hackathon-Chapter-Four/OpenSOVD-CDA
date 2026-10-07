@@ -326,3 +326,129 @@ def add_app_dids(base: DiagLayerRaw, app: DiagLayerRaw):
         semantic="CURRENTDATA",
         long_name="Operating Time",
     )
+
+    # F240 PresenceState, uint8: 0 Clear, 1 Occupied, 2 Sensor Not Available
+    presence_dop = add_dop(
+        texttable_int_str_dop(
+            app,
+            "PresenceState",
+            [(0, "Clear"), (1, "Occupied"), (2, "Sensor Not Available")],
+        )
+    )
+    add_service_did(
+        base,
+        app,
+        "PresenceState",
+        "PresenceState",
+        0xF240,
+        presence_dop,
+        funct_class="CurrentData",
+        semantic="CURRENTDATA",
+        long_name="Presence State",
+    )
+
+    # F241 TemperatureAlarm: state (uint8), current temperature, window
+    # minimum (baseline) and rise, each sint16 * 0.1 degC. Top-level
+    # parameters like F210 (mixed types, no STRUCTURE needed).
+    alarm_dop = add_dop(
+        texttable_int_str_dop(app, "AlarmState", [(0, "Armed"), (1, "Triggered")])
+    )
+    add_service_did(
+        base,
+        app,
+        "TemperatureAlarm",
+        "TemperatureAlarm",
+        0xF241,
+        None,
+        funct_class="CurrentData",
+        semantic="CURRENTDATA",
+        long_name="Temperature Alarm",
+        read_params=[
+            ValueParameter(
+                short_name=name, semantic="DATA", byte_position=pos, dop_ref=ref(dop)
+            )
+            for name, pos, dop in [
+                ("AlarmState", 3, alarm_dop),
+                ("CurrentTemperature", 4, temp_dop),
+                ("BaselineTemperature", 6, temp_dop),
+                ("TemperatureRise", 8, temp_dop),
+            ]
+        ],
+    )
+
+    # F242 AlarmRiseThreshold, uint16 * 0.1 degC (0.1..50.0); R; W in session 03
+    rise_dop = add_dop(
+        linear_dop(app, "TemperatureDelta_UInt16_0p1", False, 16, 0.1, unit("DegreeCelsius"))
+    )
+    add_service_did(
+        base,
+        app,
+        "AlarmRiseThreshold",
+        "AlarmRiseThreshold",
+        0xF242,
+        rise_dop,
+        funct_class="StoredData",
+        semantic="STOREDDATA",
+        long_name="Alarm Temperature Rise Threshold",
+        write_sessions=WRITE_SESSIONS,
+    )
+
+    # F243 AlarmTimeWindow, uint16 seconds (10..3600); R; W in session 03
+    window_dop = add_dop(int_dop(app, "Seconds_UInt16", False, 16, unit("Second")))
+    add_service_did(
+        base,
+        app,
+        "AlarmTimeWindow",
+        "AlarmTimeWindow",
+        0xF243,
+        window_dop,
+        funct_class="StoredData",
+        semantic="STOREDDATA",
+        long_name="Alarm Time Window",
+        write_sessions=WRITE_SESSIONS,
+    )
+
+    # F244 AlarmFallThreshold, uint16 * 0.1 degC (0.1..50.0); R; W in session 03.
+    # A triggered alarm clears when the temperature falls this much from its
+    # peak (or when the cabin is clear).
+    add_service_did(
+        base,
+        app,
+        "AlarmFallThreshold",
+        "AlarmFallThreshold",
+        0xF244,
+        rise_dop,
+        funct_class="StoredData",
+        semantic="STOREDDATA",
+        long_name="Alarm Temperature Fall Threshold",
+        write_sessions=WRITE_SESSIONS,
+    )
+
+    # F245 AlarmHotLimit, uint16 * 0.1 degC (0.0..80.0); R; W in session 03.
+    # Occupied and above it for AlarmHotHoldTime in a row triggers the alarm.
+    add_service_did(
+        base,
+        app,
+        "AlarmHotLimit",
+        "AlarmHotLimit",
+        0xF245,
+        rise_dop,
+        funct_class="StoredData",
+        semantic="STOREDDATA",
+        long_name="Alarm Hot Temperature Limit",
+        write_sessions=WRITE_SESSIONS,
+    )
+
+    # F246 AlarmHotHoldTime, uint16 seconds (1..3600); R; W in session 03
+    add_service_did(
+        base,
+        app,
+        "AlarmHotHoldTime",
+        "AlarmHotHoldTime",
+        0xF246,
+        window_dop,
+        funct_class="StoredData",
+        semantic="STOREDDATA",
+        long_name="Alarm Hot Hold Time",
+        write_sessions=WRITE_SESSIONS,
+    )

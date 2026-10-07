@@ -44,6 +44,7 @@ DTCS = [
     (0xC10200, "PressureSensorNoResponse", "LPS22HB pressure sensor no response"),
     (0xC10300, "InertialSensorNoResponse", "LSM6DSL inertial sensor no response"),
     (0xC10400, "MagnetometerNoResponse", "LIS2MDL magnetometer no response"),
+    (0xC10500, "PresenceDetectionNotAvailable", "Occupancy data not available"),
 ]
 
 DTC_STATUS_BITS = [
