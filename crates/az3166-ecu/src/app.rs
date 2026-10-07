@@ -23,7 +23,12 @@ use ace_server::security_provider::{SecurityError, SecurityProvider};
 use ace_server::server::UdsServer;
 use ace_sim::io::NodeAddress;
 
-use crate::board::{Board, BootState, FlashError, Sensor, LED_COUNT, MAX_SPEECH_TEXT};
+use crate::board::CONFIG_UNSET;
+use crate::board::{AlarmConfig, Board, BootState, FlashError, Sensor, LED_COUNT, MAX_SPEECH_TEXT};
+use crate::presence::{
+    AlarmShared, HOT_HOLD_DEFAULT, HOT_HOLD_MAX, HOT_HOLD_MIN, HOT_LIMIT_DEFAULT, HOT_LIMIT_MAX,
+    RISE_MAX, RISE_MIN, WINDOW_MAX, WINDOW_MIN,
+};
 use crate::{
     common_did, Policy, Shared, ECU_ADDRESS, FUNCTIONAL_ADDRESS, OUTBOX, RESET_HARD,
     ROUTINE_ABORTED, ROUTINE_COMPLETED, ROUTINE_IDLE, ROUTINE_RUNNING, VIN, VOLUME_MAX,
@@ -38,6 +43,7 @@ const ROUTINE_ANNOUNCE_TEMPERATURE: u16 = 0x1002;
 const ROUTINE_VOLUME_UP: u16 = 0x1003;
 const ROUTINE_VOLUME_DOWN: u16 = 0x1004;
 const ROUTINE_SPEAK_TEXT: u16 = 0x1005;
+const ROUTINE_RESET_DETECTION: u16 = 0x1006;
 /// Routines that speak; one at a time has the audio output.
 const SPEECH_ROUTINES: [u16; 2] = [ROUTINE_ANNOUNCE_TEMPERATURE, ROUTINE_SPEAK_TEXT];
 const SESSION_EXTENDED: u8 = 0x03;
@@ -49,6 +55,10 @@ const LED_DUTY: [u8; LED_COUNT] = [40, 55, 70, 85, 100];
 const DTC_STATUS_FAILED_CONFIRMED: u8 = 0x09;
 
 const MAX_DTCS: usize = 8;
+
+/// Occupancy data not available (the presence sensor does not answer).
+const DTC_PRESENCE_NOT_AVAILABLE: [u8; 3] = [0xC1, 0x05, 0x00];
+const DTC_TEST_FAILED: u8 = 0x01;
 
 #[derive(Clone)]
 struct Dtc {
@@ -147,6 +157,43 @@ pub fn read_did<B: Board>(
             buf[..4].copy_from_slice(&secs.to_be_bytes());
             Ok(4)
         }
+        0xF240 => {
+            buf[0] = shared.alarm.presence.load(Ordering::Relaxed);
+            Ok(1)
+        }
+        0xF241 => {
+            let a = &shared.alarm;
+            buf[0] = a.alarm.load(Ordering::SeqCst);
+            buf[1..3].copy_from_slice(&a.temperature.load(Ordering::Relaxed).to_be_bytes());
+            buf[3..5].copy_from_slice(&a.baseline.load(Ordering::Relaxed).to_be_bytes());
+            buf[5..7].copy_from_slice(&a.rise.load(Ordering::Relaxed).to_be_bytes());
+            Ok(7)
+        }
+        0xF242 => {
+            let rise = shared.alarm.rise_threshold.load(Ordering::Relaxed);
+            buf[..2].copy_from_slice(&rise.to_be_bytes());
+            Ok(2)
+        }
+        0xF243 => {
+            let window = shared.alarm.window_s.load(Ordering::Relaxed);
+            buf[..2].copy_from_slice(&window.to_be_bytes());
+            Ok(2)
+        }
+        0xF244 => {
+            let fall = shared.alarm.fall_threshold.load(Ordering::Relaxed);
+            buf[..2].copy_from_slice(&fall.to_be_bytes());
+            Ok(2)
+        }
+        0xF245 => {
+            let limit = shared.alarm.hot_limit.load(Ordering::Relaxed);
+            buf[..2].copy_from_slice(&limit.to_be_bytes());
+            Ok(2)
+        }
+        0xF246 => {
+            let hold = shared.alarm.hot_hold_s.load(Ordering::Relaxed);
+            buf[..2].copy_from_slice(&hold.to_be_bytes());
+            Ok(2)
+        }
         _ => Err(BuiltinNrc::RequestOutOfRange),
     }
 }
@@ -204,6 +251,7 @@ impl<B: Board> ServerHandler for AppHandler<B> {
             0xF211 => 3,
             0xF212 => 16,
             0xF213 => 1,
+            0xF242..=0xF246 => 2,
             _ => return Err(BuiltinNrc::RequestOutOfRange),
         };
         if data.len() != expected_len {
@@ -219,6 +267,24 @@ impl<B: Board> ServerHandler for AppHandler<B> {
                     return Err(BuiltinNrc::RequestOutOfRange);
                 }
                 self.set_volume(data[0]);
+            }
+            0xF242..=0xF246 => {
+                let value = u16::from_be_bytes([data[0], data[1]]);
+                let mut config = alarm_config(&self.shared.alarm);
+                match did {
+                    0xF242 => config.rise = value,
+                    0xF243 => config.window_s = value,
+                    0xF244 => config.fall = value,
+                    0xF245 => config.hot_limit = value,
+                    _ => config.hot_hold_s = value,
+                }
+                if !alarm_config_valid(&config) {
+                    return Err(BuiltinNrc::RequestOutOfRange);
+                }
+                self.board
+                    .store_alarm_config(config)
+                    .map_err(|FlashError| BuiltinNrc::GeneralProgrammingFailure)?;
+                set_alarm_config(&self.shared.alarm, &config);
             }
             0xF211 => {
                 let rgb: [u8; 3] = data.try_into().expect("length checked");
@@ -267,6 +333,16 @@ impl<B: Board> ServerHandler for AppHandler<B> {
             }
             ROUTINE_ANNOUNCE_TEMPERATURE | ROUTINE_SPEAK_TEXT => {
                 return self.speech_routine(routine_id, sub_function, data, buf)
+            }
+            ROUTINE_RESET_DETECTION => {
+                // Start only: clears the alarm, the window restarts from the
+                // current temperature. Response: the alarm state.
+                if sub_function != 0x01 {
+                    return Err(BuiltinNrc::SubFunctionNotSupported);
+                }
+                self.shared.alarm.reset();
+                buf[0] = self.shared.alarm.alarm.load(Ordering::SeqCst);
+                return Ok(1);
             }
             ROUTINE_VOLUME_UP | ROUTINE_VOLUME_DOWN => {
                 return self.change_volume(routine_id == ROUTINE_VOLUME_UP, sub_function, buf)
@@ -409,6 +485,45 @@ impl<B: Board> AppHandler<B> {
     }
 }
 
+fn alarm_config(alarm: &AlarmShared) -> AlarmConfig {
+    AlarmConfig {
+        rise: alarm.rise_threshold.load(Ordering::Relaxed),
+        window_s: alarm.window_s.load(Ordering::Relaxed),
+        fall: alarm.fall_threshold.load(Ordering::Relaxed),
+        hot_limit: alarm.hot_limit.load(Ordering::Relaxed),
+        hot_hold_s: alarm.hot_hold_s.load(Ordering::Relaxed),
+    }
+}
+
+fn set_alarm_config(alarm: &AlarmShared, config: &AlarmConfig) {
+    alarm.rise_threshold.store(config.rise, Ordering::Relaxed);
+    alarm.window_s.store(config.window_s, Ordering::Relaxed);
+    alarm.fall_threshold.store(config.fall, Ordering::Relaxed);
+    alarm.hot_limit.store(config.hot_limit, Ordering::Relaxed);
+    alarm.hot_hold_s.store(config.hot_hold_s, Ordering::Relaxed);
+}
+
+/// Rise and fall 0.1..50.0 °C, window 10..3600 s, hot limit 0.0..80.0 °C,
+/// hold time 1..3600 s.
+fn alarm_config_valid(config: &AlarmConfig) -> bool {
+    (RISE_MIN..=RISE_MAX).contains(&config.rise)
+        && (RISE_MIN..=RISE_MAX).contains(&config.fall)
+        && (WINDOW_MIN..=WINDOW_MAX).contains(&config.window_s)
+        && config.hot_limit <= HOT_LIMIT_MAX
+        && (HOT_HOLD_MIN..=HOT_HOLD_MAX).contains(&config.hot_hold_s)
+}
+
+/// Saved configurations from before F245 / F246 lack them: defaults.
+fn with_defaults(mut config: AlarmConfig) -> AlarmConfig {
+    if config.hot_limit == CONFIG_UNSET {
+        config.hot_limit = HOT_LIMIT_DEFAULT;
+    }
+    if config.hot_hold_s == CONFIG_UNSET {
+        config.hot_hold_s = HOT_HOLD_DEFAULT;
+    }
+    config
+}
+
 /// The SpeakText option record: 1..=MAX_SPEECH_TEXT printable ASCII bytes.
 fn speech_text(data: &[u8]) -> Result<&str, BuiltinNrc> {
     if data.is_empty() {
@@ -479,12 +594,18 @@ pub fn app_server_config() -> ServerConfig {
         .with_did(DidConfig::read_write(0xF190, DEF_EXT, EXT)) // VIN
         .with_did(DidConfig::read_write(0xF211, DEF_EXT, EXT)) // RGB LED
         .with_did(DidConfig::read_write(0xF212, DEF_EXT, EXT)) // display text
-        .with_did(DidConfig::read_write(0xF213, DEF_EXT, EXT)); // audio volume
+        .with_did(DidConfig::read_write(0xF213, DEF_EXT, EXT)) // audio volume
+        .with_did(DidConfig::read_write(0xF242, DEF_EXT, EXT)) // alarm rise threshold
+        .with_did(DidConfig::read_write(0xF243, DEF_EXT, EXT)) // alarm time window
+        .with_did(DidConfig::read_write(0xF244, DEF_EXT, EXT)) // alarm fall threshold
+        .with_did(DidConfig::read_write(0xF245, DEF_EXT, EXT)) // alarm hot limit
+        .with_did(DidConfig::read_write(0xF246, DEF_EXT, EXT)); // alarm hot hold time
 
     for did in [
         0xF100, 0xF186, 0xF18C, 0xF195, // identification
         0xF201, 0xF202, 0xF203, 0xF204, 0xF205, 0xF206, // sensors
         0xF210, 0xF220, 0xF221, 0xF230, // board state
+        0xF240, 0xF241, // occupancy, temperature alarm
     ] {
         config = config.with_did(DidConfig::read_only(did, DEF_EXT));
     }
@@ -498,6 +619,9 @@ pub fn app_server_config() -> ServerConfig {
 pub struct AppEcu<B: Board> {
     pub(crate) server: UdsServer<AppHandler<B>, AppSecurity, OUTBOX>,
     dtcs: heapless::Vec<Dtc, MAX_DTCS>,
+    shared: &'static Shared,
+    /// Status of DTC_PRESENCE_NOT_AVAILABLE, follows `alarm.sensor_fault`.
+    presence_dtc: u8,
 }
 
 impl<B: Board> AppEcu<B> {
@@ -518,6 +642,13 @@ impl<B: Board> AppEcu<B> {
         shared.vin.set(VIN);
         shared.rgb.set(&[0; 3]);
         shared.display_text.set(&display_text);
+        if let Some(config) = board
+            .load_alarm_config()
+            .map(with_defaults)
+            .filter(alarm_config_valid)
+        {
+            set_alarm_config(&shared.alarm, &config);
+        }
         let handler = AppHandler {
             board,
             shared,
@@ -531,6 +662,17 @@ impl<B: Board> AppEcu<B> {
                 NodeAddress(ECU_ADDRESS as u32),
             ),
             dtcs,
+            shared,
+            presence_dtc: 0,
+        }
+    }
+
+    /// testFailed follows the sensor; confirmed stays until ClearDTC.
+    fn update_presence_dtc(&mut self) {
+        if self.shared.alarm.sensor_fault.load(Ordering::Relaxed) {
+            self.presence_dtc = DTC_STATUS_FAILED_CONFIRMED;
+        } else {
+            self.presence_dtc &= !DTC_TEST_FAILED;
         }
     }
 
@@ -538,6 +680,7 @@ impl<B: Board> AppEcu<B> {
     /// if the request was handled here.
     pub(crate) fn handle_local(&mut self, request: &[u8], response: &mut [u8]) -> Option<usize> {
         let mut out = heapless::Vec::<u8, 64>::new();
+        self.update_presence_dtc();
         match request[0] {
             0x14 => self.clear_dtc(request, &mut out),
             0x19 => self.read_dtc(request, &mut out),
@@ -556,6 +699,8 @@ impl<B: Board> AppEcu<B> {
             return;
         }
         self.dtcs.clear();
+        self.presence_dtc = 0;
+        self.update_presence_dtc();
         let _ = out.push(0x54);
     }
 
@@ -576,6 +721,10 @@ impl<B: Board> AppEcu<B> {
                 for dtc in self.dtcs.iter().filter(|d| d.status & status_mask != 0) {
                     let _ = out.extend_from_slice(&dtc.code);
                     let _ = out.push(dtc.status);
+                }
+                if self.presence_dtc & status_mask != 0 {
+                    let _ = out.extend_from_slice(&DTC_PRESENCE_NOT_AVAILABLE);
+                    let _ = out.push(self.presence_dtc);
                 }
             }
             _ => {

@@ -20,6 +20,7 @@
 pub mod app;
 pub mod board;
 pub mod boot;
+pub mod presence;
 pub mod update;
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
@@ -111,6 +112,8 @@ pub struct Shared {
     pub vin: SeqBytes<17>,
     pub rgb: SeqBytes<3>,
     pub display_text: SeqBytes<16>,
+    /// Occupancy and temperature-rise alarm (DIDs F240-F243).
+    pub alarm: presence::AlarmShared,
 }
 
 impl Shared {
@@ -124,6 +127,7 @@ impl Shared {
             vin: SeqBytes::new(),
             rgb: SeqBytes::new(),
             display_text: SeqBytes::new(),
+            alarm: presence::AlarmShared::new(),
         }
     }
 

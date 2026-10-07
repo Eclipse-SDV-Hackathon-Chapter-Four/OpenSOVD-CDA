@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::vec::Vec;
 
 use super::*;
+use crate::board::AlarmConfig;
 
 #[derive(Default)]
 struct BoardState {
@@ -24,6 +25,7 @@ struct BoardState {
     erased: Option<u32>,
     committed: Option<u32>,
     spoken: String,
+    alarm_config: Option<AlarmConfig>,
     speaking: bool,
     volume: Option<u8>,
 }
@@ -149,6 +151,13 @@ impl Board for FakeBoard {
     }
     fn set_volume(&self, percent: u8) {
         self.state().volume = Some(percent);
+    }
+    fn load_alarm_config(&self) -> Option<AlarmConfig> {
+        self.state().alarm_config
+    }
+    fn store_alarm_config(&self, config: AlarmConfig) -> Result<(), FlashError> {
+        self.state().alarm_config = Some(config);
+        Ok(())
     }
 }
 
@@ -703,4 +712,116 @@ fn ecu_size_fits_mcu_ram() {
     let size = core::mem::size_of::<Ecu<FakeBoard>>();
     std::println!("Ecu size: {size} bytes");
     assert!(size < 160 * 1024, "Ecu is {size} bytes");
+}
+
+#[test]
+fn presence_and_alarm_dids() {
+    use crate::presence::*;
+    let mut h = Harness::new(BootState::AppValid);
+    // Before the first detector step: no occupancy data
+    assert_eq!(
+        h.req(&[0x22, 0xF2, 0x40]),
+        [0x62, 0xF2, 0x40, PRESENCE_NOT_AVAILABLE]
+    );
+    let mut d = Detector::new();
+    d.step(&h.shared.alarm, Some(true), Some(215));
+    d.step(&h.shared.alarm, Some(true), Some(245));
+    assert_eq!(
+        h.req(&[0x22, 0xF2, 0x40]),
+        [0x62, 0xF2, 0x40, PRESENCE_OCCUPIED]
+    );
+    // triggered, 24.5 C, baseline 21.5 C, rise 3.0 C
+    assert_eq!(
+        h.req(&[0x22, 0xF2, 0x41]),
+        [
+            0x62,
+            0xF2,
+            0x41,
+            ALARM_TRIGGERED,
+            0x00,
+            245,
+            0x00,
+            215,
+            0x00,
+            30
+        ]
+    );
+    // ResetDetection in the default session
+    assert_eq!(
+        h.req(&[0x31, 0x01, 0x10, 0x06]),
+        [0x71, 0x01, 0x10, 0x06, ALARM_ARMED]
+    );
+    assert_eq!(h.req(&[0x22, 0xF2, 0x41])[3], ALARM_ARMED);
+    assert_eq!(h.req(&[0x31, 0x03, 0x10, 0x06]), [0x7F, 0x31, 0x12]);
+}
+
+#[test]
+fn alarm_configuration_is_persisted() {
+    let mut h = Harness::new(BootState::AppValid);
+    assert_eq!(h.req(&[0x22, 0xF2, 0x42]), [0x62, 0xF2, 0x42, 0x00, 7]);
+    assert_eq!(h.req(&[0x22, 0xF2, 0x43]), [0x62, 0xF2, 0x43, 0x01, 0x2C]);
+    // extended session only
+    assert_eq!(h.req(&[0x2E, 0xF2, 0x42, 0x00, 10])[..2], [0x7F, 0x2E]);
+    h.req(&[0x10, 0x03]);
+    assert_eq!(h.req(&[0x2E, 0xF2, 0x42, 0x00, 10]), [0x6E, 0xF2, 0x42]);
+    assert_eq!(h.req(&[0x2E, 0xF2, 0x43, 0x00, 60]), [0x6E, 0xF2, 0x43]);
+    assert_eq!(h.req(&[0x22, 0xF2, 0x44]), [0x62, 0xF2, 0x44, 0x00, 7]);
+    assert_eq!(h.req(&[0x2E, 0xF2, 0x44, 0x00, 5]), [0x6E, 0xF2, 0x44]);
+    assert_eq!(h.req(&[0x22, 0xF2, 0x45]), [0x62, 0xF2, 0x45, 0x00, 250]);
+    assert_eq!(h.req(&[0x22, 0xF2, 0x46]), [0x62, 0xF2, 0x46, 0x00, 60]);
+    assert_eq!(h.req(&[0x2E, 0xF2, 0x45, 0x01, 0x2C]), [0x6E, 0xF2, 0x45]); // 30.0 C
+    assert_eq!(h.req(&[0x2E, 0xF2, 0x46, 0x00, 30]), [0x6E, 0xF2, 0x46]);
+    assert_eq!(h.req(&[0x2E, 0xF2, 0x45, 0x03, 0x21]), [0x7F, 0x2E, 0x31]); // 80.1 C
+    assert_eq!(h.req(&[0x2E, 0xF2, 0x46, 0x00, 0x00]), [0x7F, 0x2E, 0x31]);
+    let saved = AlarmConfig {
+        rise: 10,
+        window_s: 60,
+        fall: 5,
+        hot_limit: 300,
+        hot_hold_s: 30,
+    };
+    assert_eq!(h.board.state().alarm_config, Some(saved));
+    // out of range
+    assert_eq!(h.req(&[0x2E, 0xF2, 0x43, 0x00, 5]), [0x7F, 0x2E, 0x31]);
+    assert_eq!(h.req(&[0x2E, 0xF2, 0x42, 0x00, 0]), [0x7F, 0x2E, 0x31]);
+    assert_eq!(h.req(&[0x2E, 0xF2, 0x44, 0x01, 0xF5]), [0x7F, 0x2E, 0x31]);
+    assert_eq!(h.board.state().alarm_config, Some(saved));
+
+    // loaded at start-up
+    let board = FakeBoard::default();
+    // saved before F245 / F246 existed: their defaults apply
+    board.state().alarm_config = Some(AlarmConfig {
+        rise: 15,
+        window_s: 120,
+        fall: 7,
+        hot_limit: board::CONFIG_UNSET,
+        hot_hold_s: board::CONFIG_UNSET,
+    });
+    let mut h = Harness::with_board(BootState::AppValid, board);
+    assert_eq!(h.req(&[0x22, 0xF2, 0x42]), [0x62, 0xF2, 0x42, 0x00, 15]);
+    assert_eq!(h.req(&[0x22, 0xF2, 0x43]), [0x62, 0xF2, 0x43, 0x00, 120]);
+    assert_eq!(h.req(&[0x22, 0xF2, 0x44]), [0x62, 0xF2, 0x44, 0x00, 7]);
+    assert_eq!(h.req(&[0x22, 0xF2, 0x45]), [0x62, 0xF2, 0x45, 0x00, 250]);
+    assert_eq!(h.req(&[0x22, 0xF2, 0x46]), [0x62, 0xF2, 0x46, 0x00, 60]);
+}
+
+#[test]
+fn presence_dtc_follows_the_sensor() {
+    use crate::presence::*;
+    let mut h = Harness::new(BootState::AppValid);
+    let mut d = Detector::new();
+    for _ in 0..SENSOR_FAULT_AFTER_S {
+        d.step(&h.shared.alarm, None, Some(200));
+    }
+    assert_eq!(
+        h.req(&[0x19, 0x02, 0xFF]),
+        [0x59, 0x02, 0xFF, 0xC1, 0x05, 0x00, 0x09]
+    );
+    d.step(&h.shared.alarm, Some(false), Some(200));
+    assert_eq!(
+        h.req(&[0x19, 0x02, 0xFF]),
+        [0x59, 0x02, 0xFF, 0xC1, 0x05, 0x00, 0x08]
+    );
+    assert_eq!(h.req(&[0x14, 0xFF, 0xFF, 0xFF]), [0x54]);
+    assert_eq!(h.req(&[0x19, 0x02, 0xFF]), [0x59, 0x02, 0xFF]);
 }

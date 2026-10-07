@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use az3166_doip::{udp, Connection, DoipConfig, SendError, Transport, UdsHandler};
-use az3166_ecu::board::{Board, BootState, FlashError, Sensor};
+use az3166_ecu::board::{AlarmConfig, Board, BootState, FlashError, Sensor};
 use az3166_ecu::{app, Ecu, Shared, ECU_ADDRESS, FUNCTIONAL_ADDRESS, RESET_NONE, VIN};
 
 const PORT: u16 = 13400;
@@ -119,6 +119,13 @@ impl Board for SimBoard {
         false
     }
     fn speak_stop(&self) {}
+    fn load_alarm_config(&self) -> Option<AlarmConfig> {
+        None
+    }
+    fn store_alarm_config(&self, config: AlarmConfig) -> Result<(), FlashError> {
+        println!("[board] alarm config {:?}", config);
+        Ok(())
+    }
     fn set_volume(&self, percent: u8) {
         println!("[board] volume {}%", percent);
     }

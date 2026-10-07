@@ -43,6 +43,24 @@ pub const LED_COUNT: usize = 5;
 /// Longest text for [`Board::speak`], in bytes.
 pub const MAX_SPEECH_TEXT: usize = 200;
 
+/// Temperature alarm parameters (DIDs F242-F244).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AlarmConfig {
+    /// Rise that triggers the alarm, 0.1 °C.
+    pub rise: u16,
+    /// Time window of the rise, s.
+    pub window_s: u16,
+    /// Fall from the peak that clears the alarm, 0.1 °C.
+    pub fall: u16,
+    /// Occupied above this temperature (0.1 °C) for `hot_hold_s` also
+    /// triggers the alarm. `CONFIG_UNSET` when loaded from an older record.
+    pub hot_limit: u16,
+    pub hot_hold_s: u16,
+}
+
+/// A configuration value not saved yet (the default applies).
+pub const CONFIG_UNSET: u16 = 0xFFFF;
+
 /// Writing the persistent boot state to flash failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FlashError;
@@ -93,6 +111,10 @@ pub trait Board {
     fn speaking(&self) -> bool;
     /// Stops speaking.
     fn speak_stop(&self);
+    /// Alarm configuration saved in flash, if any was saved.
+    fn load_alarm_config(&self) -> Option<AlarmConfig>;
+    /// Saves the alarm configuration in flash.
+    fn store_alarm_config(&self, config: AlarmConfig) -> Result<(), FlashError>;
     /// Sets the audio output volume, 0..=100 % (0 = mute).
     fn set_volume(&self, percent: u8);
 }
