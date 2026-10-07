@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
+"""Shows or sets the AZ3166 temperature alarm parameters through the CDA.
+The ECU saves them in flash, so they survive resets.
+
+    scripts/az3166-presence-config                      # show
+    scripts/az3166-presence-config --rise 3.0           # threshold in degC (0.1..50.0)
+    scripts/az3166-presence-config --window 300         # time window in s (10..3600)
+    scripts/az3166-presence-config --fall 2.0           # clear after falling by (0.1..50.0 degC)
+    scripts/az3166-presence-config --rise 1.0 --window 60 --fall 0.5
+    scripts/az3166-presence-config --hot-limit 25.0 --hot-hold 60
+
+The alarm triggers when occupied and the temperature rose by --rise within
+--window, or stayed above --hot-limit for --hot-hold seconds; it clears when
+the cabin is clear or the temperature fell by --fall from its peak. Writes
+need the Extended session (DIDs F242-F246);
+the script switches to it and back to Default. Uses the CDA's SOVD data
+endpoints (AlarmRiseThreshold, AlarmTimeWindow, AlarmFallThreshold).
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from az3166_cda import (  # noqa: E402
+    DEFAULT_CDA,
+    DEFAULT_ECU,
+    DATA_FALL,
+    DATA_HOT_HOLD,
+    DATA_HOT_LIMIT,
+    DATA_RISE,
+    DATA_WINDOW,
+    Cda,
+    CdaError,
+    read_config,
+)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--cda", default=DEFAULT_CDA)
+    parser.add_argument("--ecu", default=DEFAULT_ECU)
+    parser.add_argument("--rise", type=float, help="temperature rise threshold in degC")
+    parser.add_argument("--window", type=int, help="time window in seconds")
+    parser.add_argument("--fall", type=float, help="temperature fall (from the peak) that clears the alarm, degC")
+    parser.add_argument("--hot-limit", type=float, help="occupied above this temperature (degC) ...")
+    parser.add_argument("--hot-hold", type=int, help="... for this many seconds in a row also triggers")
+    args = parser.parse_args()
+    if args.rise is not None and not 0.1 <= args.rise <= 50.0:
+        parser.error("--rise must be 0.1..50.0")
+    if args.window is not None and not 10 <= args.window <= 3600:
+        parser.error("--window must be 10..3600")
+    if args.fall is not None and not 0.1 <= args.fall <= 50.0:
+        parser.error("--fall must be 0.1..50.0")
+    if args.hot_limit is not None and not 0.0 <= args.hot_limit <= 80.0:
+        parser.error("--hot-limit must be 0.0..80.0")
+    if args.hot_hold is not None and not 1 <= args.hot_hold <= 3600:
+        parser.error("--hot-hold must be 1..3600")
+    writes = [
+        (DATA_RISE, None if args.rise is None else round(args.rise, 1)),
+        (DATA_WINDOW, args.window),
+        (DATA_FALL, None if args.fall is None else round(args.fall, 1)),
+        (DATA_HOT_LIMIT, None if args.hot_limit is None else round(args.hot_limit, 1)),
+        (DATA_HOT_HOLD, args.hot_hold),
+    ]
+    writes = [(name, value) for name, value in writes if value is not None]
+
+    cda = Cda(args.cda, args.ecu)
+    try:
+        cda.connect()
+        if writes:
+            cda.session("extended")
+            try:
+                for name, value in writes:
+                    cda.write_data(name, value)
+            finally:
+                cda.session("default")
+        rise, window, fall = read_config(cda)
+        hot_limit = float(cda.read_data(DATA_HOT_LIMIT)[DATA_HOT_LIMIT])
+        hot_hold = int(cda.read_data(DATA_HOT_HOLD)[DATA_HOT_HOLD])
+    except CdaError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    print(f"Alarm when occupied and the temperature rises by {rise:.1f} C within {window} s,")
+    print(f"or stays above {hot_limit:.1f} C for {hot_hold} s;")
+    print(f"cleared when the cabin is clear or the temperature falls by {fall:.1f} C from its peak")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

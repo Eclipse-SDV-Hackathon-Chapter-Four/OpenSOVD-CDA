@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
+"""Resets the AZ3166 temperature alarm through the CDA (operation
+ResetDetection, routine 1006): clears a triggered alarm and restarts the
+time window from the current temperature.
+
+    scripts/az3166-presence-reset
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from az3166_cda import (  # noqa: E402
+    DEFAULT_CDA,
+    DEFAULT_ECU,
+    OPERATION_RESET,
+    Cda,
+    CdaError,
+)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--cda", default=DEFAULT_CDA)
+    parser.add_argument("--ecu", default=DEFAULT_ECU)
+    args = parser.parse_args()
+
+    cda = Cda(args.cda, args.ecu)
+    try:
+        cda.connect()
+        state = cda.run_operation(OPERATION_RESET).get("AlarmState", "?")
+    except CdaError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    print(f"Detection reset: alarm {state}, window restarts from the current temperature")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

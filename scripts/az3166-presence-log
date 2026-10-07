@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# This file is 100% AI-generated (Claude Code, Claude Opus 5.5).
+"""Demo log: queries the AZ3166 presence / temperature alarm through the CDA
+once a second and prints a line whenever the state changes. Runs hook scripts when the
+alarm triggers and when it is cleared again.
+
+    scripts/az3166-presence-log
+    scripts/az3166-presence-log --on-alarm /path/to/alarm-action --on-clear /path/to/clear-action
+    AZ3166_ALARM_HOOK=... AZ3166_CLEAR_HOOK=... scripts/az3166-presence-log
+
+The hooks make the outside follow the alarm: --on-alarm runs when the alarm
+triggers, --on-clear when it is cleared again (the cabin became clear, the
+temperature fell by the fall threshold, or ResetDetection,
+scripts/az3166-presence-reset). The state found at start counts as the
+current one (nothing runs for it). Between two hooks at least --min-gap
+seconds pass (default 30); changes meanwhile are merged, so after the gap
+only the hook for the then current state runs, if it differs. Hooks run in
+the background, one at a time; their output goes to --hook-log (default:
+discarded), not to the screen. They get AZ3166_EVENT (alarm / clear),
+AZ3166_TEMPERATURE, AZ3166_BASELINE, AZ3166_RISE (degC) and AZ3166_PRESENCE
+in their environment.
+"""
+
+import argparse
+import os
+import subprocess
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from az3166_cda import DEFAULT_CDA, DEFAULT_ECU, Cda, CdaError, read_alarm, read_config  # noqa: E402
+
+CONFIG_EVERY_S = 10
+
+
+def log(text: str):
+    print(f"{datetime.now().strftime('%H:%M:%S')}  {text}", flush=True)
+
+
+def run_hook(hook: str, event: str, state: dict, hook_log):
+    env = dict(os.environ)
+    env.update(
+        AZ3166_EVENT=event,
+        AZ3166_TEMPERATURE=f"{state['temperature']:.1f}",
+        AZ3166_BASELINE=f"{state['baseline']:.1f}",
+        AZ3166_RISE=f"{state['rise']:.1f}",
+        AZ3166_PRESENCE=state["presence"],
+    )
+    log(f"HOOK  {event}: {Path(hook).name}")
+    if hook_log is not None:
+        hook_log.write(f"==> {datetime.now().isoformat(timespec='seconds')} {event}: {hook}\n")
+        hook_log.flush()
+        out = hook_log
+    else:
+        out = subprocess.DEVNULL
+    return subprocess.Popen([hook], env=env, stdout=out, stderr=subprocess.STDOUT)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--cda", default=DEFAULT_CDA)
+    parser.add_argument("--ecu", default=DEFAULT_ECU)
+    parser.add_argument("--on-alarm", default=os.environ.get("AZ3166_ALARM_HOOK"), help="script run when the alarm triggers")
+    parser.add_argument("--on-clear", default=os.environ.get("AZ3166_CLEAR_HOOK"), help="script run when the alarm is cleared")
+    parser.add_argument("--interval", type=float, default=1.0, help="seconds between queries")
+    parser.add_argument("--min-gap", type=float, default=30.0, help="seconds between two hooks")
+    parser.add_argument("--hook-log", default=os.environ.get("AZ3166_HOOK_LOG"), help="file for the hooks' output")
+    args = parser.parse_args()
+    for hook in (args.on_alarm, args.on_clear):
+        if hook and not os.access(hook, os.X_OK):
+            parser.error(f"hook is not executable: {hook}")
+
+    hook_log = open(args.hook_log, "a", buffering=1) if args.hook_log else None
+    last_line = None
+    last_error = None
+    cda = Cda(args.cda, args.ecu)
+    connected = False
+    connected_at = 0.0
+    previous_alarm = None
+    config = None
+    config_at = 0.0
+    hook_process = None
+    applied = None  # "alarm" / "clear": what the hooks last made happen (or the start state)
+    last_hook_at = None
+    waiting_for = None
+
+    log(f"AZ3166 presence log via {args.cda} (on alarm: {args.on_alarm or '-'}, on clear: {args.on_clear or '-'})")
+    while True:
+        started = time.monotonic()
+        try:
+            if not connected or started - connected_at > cda.lock_renew_s:
+                cda.connect()  # (re)new token if needed, renew the ECU lock
+                connected = True
+                connected_at = started
+            if config is None or started - config_at > CONFIG_EVERY_S:
+                config = read_config(cda)
+                config_at = started
+            state = read_alarm(cda)
+            line = (
+                f"{state['temperature']:5.1f} C  rise {state['rise']:+4.1f} C "
+                f"(min {state['baseline']:5.1f} C, +{config[0]:.1f} C in {config[1]} s, -{config[2]:.1f} C clears)  "
+                f"presence {state['presence']:<20}  alarm {state['alarm']}"
+            )
+            if line != last_line:
+                log(line)
+                last_line = line
+            last_error = None
+            if state["alarm"] == "Triggered" and previous_alarm == "Armed":
+                log("ALARM  occupied and the temperature rose by the threshold")
+            elif state["alarm"] == "Armed" and previous_alarm == "Triggered":
+                log(f"CLEAR  alarm cleared (presence {state['presence']})")
+            previous_alarm = state["alarm"]
+            wanted = "alarm" if state["alarm"] == "Triggered" else "clear"
+            if applied is None:
+                applied = wanted
+            if wanted != applied and hook_process is None:
+                since = time.monotonic() - last_hook_at if last_hook_at is not None else None
+                if since is not None and since < args.min_gap:
+                    if waiting_for != wanted:
+                        log(f"WAIT  {wanted} hook in {args.min_gap - since:.0f} s (minimum gap)")
+                        waiting_for = wanted
+                else:
+                    waiting_for = None
+                    hook = args.on_alarm if wanted == "alarm" else args.on_clear
+                    applied = wanted
+                    if hook:
+                        hook_process = run_hook(hook, wanted, state, hook_log)
+                        last_hook_at = time.monotonic()
+        except CdaError as e:
+            if str(e) != last_error:
+                log(f"CDA error: {e}")
+                last_error = str(e)
+            last_line = None
+            connected = False
+        if hook_process is not None and hook_process.poll() is not None:
+            log(f"HOOK  finished with exit code {hook_process.returncode}")
+            hook_process = None
+        time.sleep(max(0.0, args.interval - (time.monotonic() - started)))
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)
