@@ -126,9 +126,37 @@ Tester timing (MDD comparams): `CP_P6Max` 2 s, `CP_P6Star` 8 s (wait after
 | `F220` | IpAddress | 4 | 4 × uint8 (dotted quad) | – | R |
 | `F221` | MacAddress | 6 | 6 × uint8 | – | R |
 | `F230` | OperatingTime | 4 | uint32, seconds since reset | s | R |
+| `F240` | PresenceState | 1 | uint8: `00` Clear, `01` Occupied, `02` Sensor Not Available | – | R |
+| `F241` | TemperatureAlarm | 7 | AlarmState uint8 (`00` Armed, `01` Triggered); CurrentTemperature, BaselineTemperature (window minimum), TemperatureRise: 3 × sint16, physical = raw × 0.1 | °C | R |
+| `F242` | AlarmRiseThreshold | 2 | uint16, physical = raw × 0.1, 0.1–50.0 (default 0.7) | °C | R; W in session 03 |
+| `F243` | AlarmTimeWindow | 2 | uint16, 10–3600 (default 300) | s | R; W in session 03 |
+| `F244` | AlarmFallThreshold | 2 | uint16, physical = raw × 0.1, 0.1–50.0 (default 0.7) | °C | R; W in session 03 |
+| `F245` | AlarmHotLimit | 2 | uint16, physical = raw × 0.1, 0.0–80.0 (default 25.0) | °C | R; W in session 03 |
+| `F246` | AlarmHotHoldTime | 2 | uint16, 1–3600 (default 60) | s | R; W in session 03 |
 
 Sensor DIDs return NRC `22` (conditionsNotCorrect) if the sensor failed to
 initialise.
+
+### Presence and temperature alarm (F240–F246)
+
+Once a second the ECU reads the occupancy from an external presence sensor
+and the ambient temperature (HTS221). `PresenceState` is `Sensor Not
+Available` after 3 polls in a row without an answer.
+
+The alarm triggers (`Triggered`) when the cabin is **occupied** and
+- the temperature is at least `AlarmRiseThreshold` above the lowest
+  temperature of the last `AlarmTimeWindow` seconds, or
+- the temperature has stayed above `AlarmHotLimit` for `AlarmHotHoldTime`
+  seconds in a row.
+
+It clears (`Armed`) when the cabin is clear, when the temperature has fallen
+by `AlarmFallThreshold` from its peak since the alarm triggered, or with
+routine `1006` ResetDetection; the time window then restarts from the
+current temperature. Without occupancy data the alarm neither triggers nor
+clears.
+
+Writes to `F242`–`F246` out of range are NRC `31`; the values are kept in
+flash and survive resets (a failed flash write is NRC `72`).
 
 ## Routines (App)
 
@@ -139,8 +167,10 @@ initialise.
 | `1004` | VolumeDown | 01, 03 | volume −10 % (0 = mute); `71 01 10 04 <volume %>` | – | – |
 | `1002` | AnnounceTemperature | 01, 03 | speaks the ambient temperature on the headphone jack; `71 01 10 02 01` | stops; `71 02 10 02 03` (after the end: `71 02 10 02 <status>`) | `71 03 10 02 <status>` |
 | `1005` | SpeakText | 01, 03 | `31 01 10 05 <text>`: speaks 1–200 bytes of printable ASCII on the headphone jack; `71 01 10 05 01` | stops; `71 02 10 05 03` (after the end: `71 02 10 05 <status>`) | `71 03 10 05 <status>` |
+| `1006` | ResetDetection | 01, 03 | clears the temperature alarm and restarts its time window from the current temperature; `71 01 10 06 <AlarmState>` | – | – |
 
-VolumeUp and VolumeDown have Start only (the CDA runs them synchronously). The
+VolumeUp, VolumeDown and ResetDetection have Start only (the CDA runs them
+synchronously). The
 volume is 100 % after every reset.
 
 AnnounceTemperature reads the HTS221 temperature, rounded to 0.1 °C, and
@@ -172,8 +202,12 @@ blue. The Wi-Fi LED shows network state and is not part of the bar.
 | `C10200` | PressureSensorNoResponse | `09` | LPS22HB init failed |
 | `C10300` | InertialSensorNoResponse | `09` | LSM6DSL init failed |
 | `C10400` | MagnetometerNoResponse | `09` | LIS2MDL init failed |
+| `C10500` | PresenceDetectionNotAvailable | – | no occupancy data for 10 s |
 
-`14 FF FF FF` clears all DTCs (they are not re-set until the next reset).
+`14 FF FF FF` clears all DTCs. The sensor DTCs are not re-set until the next
+reset; `C10500` follows the presence sensor: `09` while occupancy data is
+missing, `08` (confirmed, not failing) once it is back, and `09` again
+after clearing if it is still missing.
 
 ## Negative response codes used
 
@@ -181,5 +215,5 @@ blue. The Wi-Fi LED shows network state and is not part of the bar.
 incorrectMessageLengthOrInvalidFormat, `22` conditionsNotCorrect, `24`
 requestSequenceError, `31` requestOutOfRange, `33` securityAccessDenied, `35`
 invalidKey, `36` exceededNumberOfAttempts, `37` requiredTimeDelayNotExpired,
-`7E` subFunctionNotSupportedInActiveSession, `7F`
+`72` generalProgrammingFailure, `7E` subFunctionNotSupportedInActiveSession, `7F`
 serviceNotSupportedInActiveSession.
