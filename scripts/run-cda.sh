@@ -6,8 +6,9 @@
 #
 #   scripts/run-cda.sh <ecu-ip> [extra CDA args...]
 #
-# Uses odx/AZ3166.mdd, the tester interface that routes to <ecu-ip> (board
-# or host_sim) and build/update as flash files directory ($FLASH_DIR).
+# Uses odx/AZ3166.mdd (or the *.mdd in $DATABASES_DIR), the tester interface
+# that routes to <ecu-ip> (board or host_sim; $TESTER_IFACE overrides it)
+# and build/update as flash files directory ($FLASH_DIR).
 # SOVD API: http://localhost:20002 (swagger-ui).
 #
 # CDA checkout: $CDA_DIR (default ~/dev/classic-diagnostic-adapter). Uses
@@ -23,6 +24,8 @@ shift
 
 # App update packages (scripts/az3166-flash) are served from here.
 FLASH_DIR="${FLASH_DIR:-${ROOT}/build/update}"
+# Diagnostic databases (*.mdd); defaults to the AZ3166 MDD in odx/.
+DATABASES_DIR="${DATABASES_DIR:-${ROOT}/odx}"
 mkdir -p "${FLASH_DIR}"
 
 if [[ -x "${CDA_DIR}/target/release/opensovd-cda" ]]; then
@@ -39,7 +42,8 @@ if [[ "${ECU_IP}" == 127.* ]]; then
     TESTER_IP="127.0.0.1"
     TESTER_MASK="255.0.0.0"
 else
-    IFACE="$(route -n get "${ECU_IP}" 2>/dev/null | awk '/interface:/ {print $2}')"
+    # TESTER_IFACE (e.g. en0) overrides the interface the route lookup finds.
+    IFACE="${TESTER_IFACE:-$(route -n get "${ECU_IP}" 2>/dev/null | awk '/interface:/ {print $2}')}"
     [[ -n "${IFACE}" ]] || { echo "No route to ${ECU_IP}" >&2; exit 1; }
     read -r TESTER_IP HEXMASK < <(ifconfig "${IFACE}" | awk '/inet / {print $2, $4; exit}')
     TESTER_MASK="$(printf '%d.%d.%d.%d' $((HEXMASK >> 24 & 255)) $((HEXMASK >> 16 & 255)) \
@@ -48,7 +52,7 @@ else
 fi
 
 exec "${CDA}" \
-    --databases-dir "${ROOT}/odx" \
+    --databases-dir "${DATABASES_DIR}" \
     --flash-files-path "${FLASH_DIR}" \
     --tester-address "${TESTER_IP}" \
     --tester-subnet "${TESTER_MASK}" \
