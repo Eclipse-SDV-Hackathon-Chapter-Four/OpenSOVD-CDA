@@ -247,6 +247,28 @@ static void I2C1_Init(void)
     }
 }
 
+/* After a transfer, with the I2C lock held: on an error (e.g. a timeout
+ * because a device holds SDA after an interrupted transfer), recover the bus
+ * and re-initialise the peripheral. Returns 1 if the transfer failed.
+ * Without this, every later transfer times out and sensor values freeze.
+ * (BUSY alone is no error: it stays set briefly after a STOP.) */
+static int i2c_recover_if_failed(void)
+{
+    uint32_t error = I2cHandle.ErrorCode;
+    if (error == HAL_I2C_ERROR_NONE)
+    {
+        return 0;
+    }
+    uint32_t speed = I2cHandle.Init.ClockSpeed;
+    HAL_I2C_DeInit(&I2cHandle);
+    I2C1_BusRecover();
+    I2cHandle.Init.ClockSpeed = speed;
+    HAL_StatusTypeDef status  = HAL_I2C_Init(&I2cHandle);
+    printf("I2C: recovered after error 0x%02lx (re-init %s)\r\n", (unsigned long)error,
+        status == HAL_OK ? "ok" : "FAILED");
+    return 1;
+}
+
 static void RNG_Init(void)
 {
     /* RNG runs from the 48 MHz PLL Q output configured in SystemClock_Config. */
@@ -514,6 +536,10 @@ void plat_display_line(uint32_t line, const uint8_t* text, uint32_t len)
         ssd1306_WriteString(display[i], Font_7x10, White);
     }
     ssd1306_UpdateScreen();
+    if (i2c_recover_if_failed())
+    {
+        memset(display[line], 0, sizeof(display[line])); /* redraw next time */
+    }
     i2c_unlock();
 }
 
@@ -554,7 +580,12 @@ int32_t plat_read_hts221(float* temperature_c, float* humidity_pct)
     }
     i2c_lock();
     hts221_data_t data = hts221_data_read();
+    int failed = i2c_recover_if_failed();
     i2c_unlock();
+    if (failed)
+    {
+        return -1;
+    }
     *temperature_c = data.temperature_degC;
     *humidity_pct  = data.humidity_perc;
     return 0;
@@ -568,7 +599,12 @@ int32_t plat_read_lps22hb(float* pressure_hpa)
     }
     i2c_lock();
     lps22hb_t data = lps22hb_data_read();
+    int failed = i2c_recover_if_failed();
     i2c_unlock();
+    if (failed)
+    {
+        return -1;
+    }
     *pressure_hpa = data.pressure_hPa;
     return 0;
 }
@@ -581,7 +617,12 @@ int32_t plat_read_lsm6dsl(float acceleration_mg[3], float angular_rate_mdps[3])
     }
     i2c_lock();
     lsm6dsl_data_t data = lsm6dsl_data_read();
+    int failed = i2c_recover_if_failed();
     i2c_unlock();
+    if (failed)
+    {
+        return -1;
+    }
     memcpy(acceleration_mg, data.acceleration_mg, sizeof(data.acceleration_mg));
     memcpy(angular_rate_mdps, data.angular_rate_mdps, sizeof(data.angular_rate_mdps));
     return 0;
@@ -595,7 +636,12 @@ int32_t plat_read_lis2mdl(float magnetic_mg[3])
     }
     i2c_lock();
     lis2mdl_data_t data = lis2mdl_data_read();
+    int failed = i2c_recover_if_failed();
     i2c_unlock();
+    if (failed)
+    {
+        return -1;
+    }
     memcpy(magnetic_mg, data.magnetic_mG, sizeof(data.magnetic_mG));
     return 0;
 }
