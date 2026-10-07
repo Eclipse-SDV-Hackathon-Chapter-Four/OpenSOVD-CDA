@@ -270,7 +270,8 @@ pub fn segments(p: Phoneme) -> &'static [Segment] {
         W => segs![voiced(60, fm(290.0, 610.0, 2150.0), 0.7)],
         Y => segs![voiced(60, fm(260.0, 2070.0, 3020.0), 0.7)],
         R => segs![voiced(60, fm(310.0, 1060.0, 1380.0), 0.7)],
-        L => segs![voiced(60, fm(310.0, 1050.0, 2880.0), 0.7)],
+        // between the light (onset) and dark (coda) L: F2 lowered
+        L => segs![voiced(70, fm(310.0, 950.0, 2650.0), 0.7)],
         M => segs![voiced(70, fm(270.0, 1100.0, 2150.0), 0.45)],
         N => segs![voiced(65, fm(270.0, 1500.0, 2500.0), 0.45)],
         NG => segs![voiced(70, fm(270.0, 2000.0, 2700.0), 0.45)],

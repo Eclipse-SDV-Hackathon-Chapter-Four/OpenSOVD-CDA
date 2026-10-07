@@ -43,7 +43,7 @@ use synth::{Params, Synth, FRAME};
 pub const MAX_PHONEMES: usize = 600;
 
 /// Speaking rate: segment durations are scaled by this factor (percent).
-const DURATION_PERCENT: u32 = 106;
+const DURATION_PERCENT: u32 = 117;
 
 /// Silent frames after the last phoneme, so the filters ring out.
 const TAIL_FRAMES: u16 = 8;
@@ -172,6 +172,15 @@ impl Speaker {
             self.synth.new_sentence();
         }
         let formants = seg.formants.unwrap_or_else(|| self.lookahead_formants());
+        // Velar bursts are lower before back (rounded) vowels: "cool" vs "key".
+        let (ff, bf) = if matches!(phoneme, Phoneme::K | Phoneme::G)
+            && seg.af > 0.0
+            && self.next_is_back_vowel()
+        {
+            (1200.0, 800.0)
+        } else {
+            (seg.ff, seg.bf)
+        };
         self.target = Params {
             f1: formants.f1,
             f2: formants.f2,
@@ -179,8 +188,8 @@ impl Speaker {
             av: seg.av,
             ah: seg.ah,
             af: seg.af,
-            ff: if seg.af > 0.0 { seg.ff } else { self.target.ff },
-            bf: if seg.af > 0.0 { seg.bf } else { self.target.bf },
+            ff: if seg.af > 0.0 { ff } else { self.target.ff },
+            bf: if seg.af > 0.0 { bf } else { self.target.bf },
         };
 
         self.segment += 1;
@@ -189,6 +198,15 @@ impl Speaker {
             self.index += 1;
         }
         Some(seg)
+    }
+
+    /// Whether the phoneme after the current one is a back vowel.
+    fn next_is_back_vowel(&self) -> bool {
+        use Phoneme::*;
+        matches!(
+            self.phonemes.get(self.index + 1),
+            Some(UW | UH | OW | AO | AA | AH | W)
+        )
     }
 
     /// Formants of the next phoneme that has its own (closures, bursts and

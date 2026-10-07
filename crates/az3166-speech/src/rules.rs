@@ -74,7 +74,7 @@ static DICTIONARY: &[(&str, &str)] = &[
     ("humidity", "HH Y UW M IH D IH T IY"), ("pressure", "P R EH SH ER"),
     ("hectopascal", "HH EH K T OW P AE S K AE L"), ("volume", "V AA L Y UW M"),
     ("diagnostic", "D AY AX G N AA S T IH K"), ("diagnostics", "D AY AX G N AA S T IH K S"),
-    ("vehicle", "V IY IH K AX L"), ("hackathon", "HH AE K AX TH AA N"),
+    ("vehicle", "V IY IH K AX L"), ("cool", "K UW UW L"), ("hot", "HH AA T"), ("hackathon", "HH AE K AX TH AA N"),
     ("eclipse", "IH K L IH P S"), ("software", "S AO F T W EH R"),
     ("update", "AH P D EY T"), ("version", "V ER ZH AX N"), ("board", "B AO R D"),
     ("sensor", "S EH N S ER"), ("sensors", "S EH N S ER Z"), ("thank", "TH AE NG K"),
