@@ -22,8 +22,8 @@ The ECU logic is Rust (`no_std`) on top of
 
 This project builds on two base projects:
 
-| Project | What it provides here |
-|---------|-----------------------|
+| —Project— | What it provides here |
+|---------|---------|
 | [eclipse-threadx/threadx](https://github.com/eclipse-threadx/threadx) | The RTOS kernel. The firmware runs its threads (UDS worker, DoIP TCP/UDP, routine) on ThreadX. Its sibling [NetX Duo](https://github.com/eclipse-threadx/netxduo) provides the IP stack. Both are pinned in `scripts/fetch-deps.sh` and fetched, not vendored. |
 | [theswiftfox/flxc1000-rpi](https://github.com/theswiftfox/flxc1000-rpi) | The original FLXC1000 ECU simulator for the Raspberry Pi 4 (Buildroot Linux). This project is an independent fork. It keeps the same ECU identity, services and Boot/App variant concept, but runs on a microcontroller, and the diagnostic data comes from the board's real sensors and actuators. |
 
